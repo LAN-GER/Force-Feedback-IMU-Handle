@@ -1,0 +1,23 @@
+idf_component_register(
+    SRCS
+        "src/bsp.c"
+        "src/bsp_gpio.c"
+        "src/bsp_usb.c"
+        "src/bsp_spi.c"
+        "src/bsp_motor_pwm.c"
+        "src/bsp_heater.c"
+        "src/bsp_encoder.c"
+        "src/bsp_ws2812.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        esp_driver_gpio
+        esp_driver_spi
+        esp_driver_ledc
+        esp_driver_rmt
+        driver
+        freertos
+        esp_rom
+        esp_timer
+        esp_driver_usb_serial_jtag
+)

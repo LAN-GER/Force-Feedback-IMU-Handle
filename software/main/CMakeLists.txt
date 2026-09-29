@@ -1,0 +1,15 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "app_sampler.c"
+        "app_usb.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        bsp
+        drv
+        svc
+        esp_timer
+        esp_system
+        freertos
+)

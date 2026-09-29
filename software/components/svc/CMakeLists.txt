@@ -1,0 +1,15 @@
+idf_component_register(
+    SRCS
+        "src/params.c"
+        "src/ff_impedance.c"
+        "src/indicate.c"
+        "src/imu_ff.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        bsp
+        drv
+        nvs_flash
+        esp_timer
+        freertos
+)
