@@ -1,0 +1,7 @@
+# The application always builds its WebSocket transport, including old sdkconfig files.
+config FFH_WIFI_WS
+    bool
+    default y
+    select ESP_WIFI_ENABLED
+    select HTTPD_WS_SUPPORT
+    select HTTPD_WS_PRE_HANDSHAKE_CB_SUPPORT

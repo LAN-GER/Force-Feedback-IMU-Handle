@@ -2,8 +2,13 @@ idf_component_register(
     SRCS
         "src/params.c"
         "src/ff_impedance.c"
+        "src/motor_pid.c"
+        "src/motor_torque.c"
+        "src/torque_dob.c"
         "src/indicate.c"
         "src/imu_ff.c"
+        "src/imu_kalman.c"
+        "src/imu_attitude.c"
     INCLUDE_DIRS
         "include"
     REQUIRES

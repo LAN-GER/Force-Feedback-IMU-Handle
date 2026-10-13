@@ -1,63 +1,86 @@
 # Force-Feedback-IMU-Handle
 
-基于自研 **ESP32-C3FH4** + **BMI088（SPI）** + **GA12-N20 霍尔编码减速电机** + **DRV8833** 的力反馈 IMU 手柄样机。
+基于自研 **ESP32-C3FH4**、**BMI088 SPI 六轴 IMU**、**JGA12-N20 系列霍尔编码减速电机**和 **DRV8876 电流检测 H 桥**的力反馈手柄样机。固件使用 ESP-IDF，配套网页通过原生 USB-Serial/JTAG 或 Wi-Fi WebSocket 读取数据和调整控制参数。
 
-工程结构与已验证的 CAN_Magnetic_Encoder 对齐：ESP-IDF 分层 APP / SVC / DRV / BSP。
+## 当前功能
 
-## 能力摘要
+- BMI088 原始六轴数据及板端六轴卡尔曼降噪；保留原始和滤波数据，支持独立开关与 NVS 保存。
+- 电机开环 PWM、阻抗力反馈、位置 PID、力矩／电流 PI 四种控制模式。
+- 编码器输出轴角度、角速度和累计计数；当前更换为 6 V 空载 500 r/min 的 `JGA12-N20-30`，减速比 30:1，暂按 7 PPR 计算 `enc_cpr=840`。7 PPR 尚需确认，设置与原 298:1 电机对照见 [电机更换与编码器参数](#电机更换与编码器参数)。
+- IPROPI 电流采样、力矩估算和外力矩 DOB；力矩系数及机械参数需标定。
+- USB JSON 调参、遥测和 IMU 诊断；IMU 初始化失败时仍保留 USB、编码器及电机调试入口。
+- 遥测默认 50 Hz，网页可设置至 100 Hz；独立定时唤醒与轻量 JSON 组包，诊断显示分段耗时。USB 配置 100 Hz 却仅接收约 50 帧/s 的问题已在本板联调中由用户确认解决，见 [遥测验证记录](docs/firmware.md#遥测验证记录)。
+- USB 配置并开关 2.4 GHz Wi-Fi，关闭时释放无线驱动和网络服务、保留账号密码；开关状态在重启后保留。网页支持 USB / Wi-Fi 切换，接入密钥通过 USB 读取。
+- 网页串口选择、实时曲线、滤波前后对比、独立滤波波形、IMU 三维方块预览、CSV 导出及无板演示。
 
-- BMI088 六轴原始数据（Acc/Gyro 独立片选，SPI Mode 3，8 MHz）
-- 单轴 N20 正交编码器测角 / 测速
-- 阻抗力反馈环：`tau = K*(theta_des - theta) - B*omega`，PWM 限幅
-- USB-Serial/JTAG JSON 调参与遥测（见 `protocol/usb_protocol.md`）
+板端使用六轴数据融合姿态，输出四元数 `quat=[w,x,y,z]`；网页直接显示该四元数，只做姿态归零及显示角换算。六轴卡尔曼用于输入降噪，相对航向可能漂移，方块角度与电机输出轴角度分别显示。
+
+## 快速开始
+
+在仓库根目录、已加载 ESP-IDF 的终端中构建和烧录；`COM3` 替换为板子的实际端口：
+
+```powershell
+idf.py build
+idf.py -p COM3 flash
+python tools/serve.py
+```
+
+使用桌面 Chrome／Edge 打开 <http://localhost:8776>，点击「选择串口并连接」。连接前关闭 IDF monitor 和其他占用该端口的程序；网页连接后发送 `get`、`sub` 读取参数并订阅遥测。没有板子可使用「演示模式」。详细步骤见 [快速上手](docs/getting_started.md)。
+
+保存参数会记录当前控制模式、目标和加热占空比；IMU 初始化成功时固件会恢复这些设置。结束调试先「停机并断开」；若希望下次上电也停机，应在停机和关闭加热后保存参数。
+
+无线连接时，先用 USB 展开网页「通过 USB 配置板子 Wi-Fi」，保存网络名称和密码，再打开「启用板端 Wi-Fi」开关，等待显示 IP；停机并断开后切换为「Wi-Fi」，地址和密钥自动填入。不使用无线时，通过 USB 关闭该开关。详见 [Wi-Fi 连接与接口](docs/wifi.md)。
 
 ## 仓库结构
 
-```text
-Force-Feedback-IMU-Handle/
-├── hardware/      # 引脚表、接线说明、BOM 草案
-├── software/      # ESP-IDF：ESP32-C3FH4（单核）
-├── protocol/      # USB JSON 协议
-├── tools/         # PC 调试脚本（占位）
-├── tests/         # Bring-up 清单
-└── docs/          # 方案与固件说明
+| 目录 | 内容 |
+|------|------|
+| [hardware](hardware/README.md) | 引脚、接线和 DRV8876 阻容选型 |
+| [software](software/README.md) | ESP-IDF 固件，APP / SVC / DRV / BSP 分层 |
+| [protocol](protocol/usb_protocol.md) | USB JSON 命令、参数和遥测字段 |
+| [tools](tools/README.md) | 静态网页、HTTP 服务及 USB 诊断脚本 |
+| [tests](tests/bringup_checklist.md) | 实板联调清单、IMU 卡尔曼／姿态及遥测组包主机测试 |
+| [docs](docs/README.md) | 上手、固件机制与力矩标定说明 |
+
+二次开发请先阅读 [板端接口协议与 SDK 说明](docs/interface_sdk.md)，包含 IMU／电机字段、控制请求、串口解析及 Python／浏览器接入示例。
+
+## 硬件与引脚
+
+| 模块／功能 | 接口 |
+|------------|------|
+| ESP32-C3FH4 | 单核，片内 4 MB Flash，原生 USB D−/D+=GPIO18/19 |
+| BMI088 SPI | SCK/MISO/MOSI=GPIO8/6/10，CS_ACC/CS_GYRO=GPIO5/7 |
+| DRV8876 PH/EN | EN/PH/nSLEEP=GPIO2/3/20，电机电源 VM=5 V |
+| IPROPI 电流采样 | GPIO4，ADC1_CH4；下拉电阻 2.2 kΩ |
+| JGA12-N20-30 编码器 | A/B=GPIO0/1，编码器供电 3.3 V，减速比 30:1；6 V 空载标称 500 r/min |
+| IMU 加热 | GPIO21 控制 YJL3400A 低侧开关 |
+| 用户键／BOOT | GPIO9，运行中短按清零编码器；上电勿按住 |
+
+本板无 WS2812。电机电源与逻辑电源分开、地相连。接线以 [引脚表](hardware/pinmap.md) 和 [bsp_pin.h](software/components/bsp/include/bsp/bsp_pin.h) 为准。
+
+## 电机更换与编码器参数
+
+2026-10-13，电机更换为参数表中 6 V 空载 500 r/min 的 `JGA12-N20-30`，减速比为 30:1。输出轴每转计数计算为 `电机轴每转脉冲数 × 正交四倍频 × 减速比`：
+
+| 电机 | 减速比 | 暂按 7 PPR 的输出轴每转计数 |
+|------|--------|-----------------------------|
+| 原电机 | 298:1 | `7 × 4 × 298 = 8344` |
+| 当前 JGA12-N20-30（6 V 空载 500 r/min） | 30:1 | `7 × 4 × 30 = 840` |
+
+参数表未提供编码器 PPR；7 PPR 沿用原电机一圈约 8292 计数的粗测推断，不能据此确认新电机编码器规格。新电机暂设 840，停机清零后手动完整转动输出轴一圈，应约 840 个计数、显示约 360°；用多圈累计计数除以圈数进一步校准。`enc_cpr` 已包含四倍频和减速比，角度换算不再额外乘四或除以 30。
+
+当前固件内置默认值仍为原电机的 8344，更换电机后需配置运行参数：网页先停止电机，点击「读取参数」，展开「编码器、DOB 与其他参数」，将「输出轴每转计数」改为 840 并发送修改，再点击「保存参数至 NVS」，等待保存成功。重启后再次读取，确认 `enc_cpr=840`。也可依次发送：
+
+```json
+{"cmd":"set","enc_cpr":840}
+{"cmd":"save"}
+{"cmd":"get"}
 ```
 
-## 硬件组合
+500 r/min 是参数表在 6 V 下的空载标称转速；本板电机 VM 为 5 V，实际转速需实测。更换电机后应重新核对控制增益、电流和力矩参数，编码器计数计算见 [网页标定说明](tools/README.md#输出轴编码器标定)。
 
-| 模块 | 型号 | 说明 |
-|------|------|------|
-| 主控 | ESP32-C3FH4 | 片内 4 MB Flash；SPI MISO 使用 GPIO6 |
-| IMU | BMI088 | SPI，CS_ACC=GPIO5，CS_GYRO=GPIO7 |
-| 加热 | 100Ω + YJL3400A | GPIO21 PWM，抑制温漂 |
-| 电机 | GA12-N20 + 霍尔编码器 | ENC_A/B = GPIO0/1 |
-| 驱动 | DRV8833 | IN1/IN2 = GPIO2/3，nSLEEP = GPIO20 |
+## 开发与验证
 
-## 快速入口
+目标芯片 `esp32c3`，当前工程使用 ESP-IDF 6.x，已在 v6.0.2 构建。推荐从仓库根目录构建，产物位于 `build/`；`software/` 也保留独立构建入口。
 
-| 要做什么 | 看哪里 |
-|----------|--------|
-| 引脚 / 接线 | `hardware/pinmap.md` |
-| 编译烧录 | `docs/getting_started.md` |
-| 固件分层 | `docs/firmware.md` |
-| USB JSON | `protocol/usb_protocol.md` |
-| 上电调试 | `tests/bringup_checklist.md` |
-
-## 默认引脚（与 CAN 磁编 SPI 一致）
-
-| 功能 | C3 GPIO |
-|------|---------|
-| SPI SCK / MISO / MOSI | 8 / 6 / 10 |
-| BMI088 CS_ACC / CS_GYRO | 5 / 7 |
-| IMU 加热（YJL3400A） | 21 |
-| MOTOR IN1 / IN2 / nSLEEP | 2 / 3 / 20 |
-| ENC A / B | 0 / 1 |
-| WS2812 | 4 |
-| 用户键 / BOOT | 9 |
-| USB D− / D+ | 18 / 19 |
-
-## 开发约定
-
-- ESP-IDF **6.x**，目标 `esp32c3`，只允许 APP → SVC → DRV → BSP 向下依赖
-- 单核：采样任务优先级 7，高于 USB 遥测
-- 电机电源与 3.3 V 逻辑分离；编码器供电用 3.3 V
+网页无需 npm 安装。协议、控制表单及姿态计算测试见 [工具测试命令](tools/README.md#测试命令)，板端卡尔曼主机测试见 [固件说明](docs/firmware.md#imu-卡尔曼降噪)，遥测组包测试与实板反馈见 [遥测验证记录](docs/firmware.md#遥测验证记录)。自动化测试使用模拟输入，实际接线、精度和控制效果仍按 [Bring-up 清单](tests/bringup_checklist.md) 校验。

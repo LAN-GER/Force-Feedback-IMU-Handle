@@ -3,6 +3,8 @@ idf_component_register(
         "app_main.c"
         "app_sampler.c"
         "app_usb.c"
+        "app_telem_json.c"
+        "app_wifi.c"
     INCLUDE_DIRS
         "."
     REQUIRES
@@ -11,5 +13,12 @@ idf_component_register(
         svc
         esp_timer
         esp_system
+        esp_app_format
         freertos
+        esp_wifi
+        esp_event
+        esp_netif
+        esp_http_server
+        nvs_flash
+        espressif__cjson
 )

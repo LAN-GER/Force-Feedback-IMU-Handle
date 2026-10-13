@@ -1,7 +1,7 @@
 /**
  * @file bsp_motor_pwm.c
  * @layer BSP
- * @brief DRV8833 双 PWM（LEDC）+ nSLEEP
+ * @brief DRV8876 PH/EN：EN=LEDC PWM，PH=GPIO 方向，nSLEEP
  */
 
 #include "bsp/bsp_motor_pwm.h"
@@ -13,8 +13,7 @@
 
 static const char *TAG = "bsp_motor";
 
-#define CH_IN1 LEDC_CHANNEL_0
-#define CH_IN2 LEDC_CHANNEL_1
+#define CH_EN  LEDC_CHANNEL_0
 #define SPEED  LEDC_LOW_SPEED_MODE
 #define TIMER  LEDC_TIMER_0
 
@@ -33,12 +32,13 @@ static uint32_t duty_to_ticks(float abs_duty)
 
 esp_err_t bsp_motor_pwm_init(void)
 {
-    gpio_config_t ns = {
-        .pin_bit_mask = 1ULL << BSP_PIN_MOTOR_NSLEEP,
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << BSP_PIN_MOTOR_NSLEEP) | (1ULL << BSP_PIN_MOTOR_PH),
         .mode = GPIO_MODE_OUTPUT,
     };
-    gpio_config(&ns);
+    gpio_config(&io);
     gpio_set_level(BSP_PIN_MOTOR_NSLEEP, 0);
+    gpio_set_level(BSP_PIN_MOTOR_PH, 1);
 
     ledc_timer_config_t timer = {
         .speed_mode = SPEED,
@@ -49,28 +49,19 @@ esp_err_t bsp_motor_pwm_init(void)
     };
     ESP_ERROR_CHECK(ledc_timer_config(&timer));
 
-    ledc_channel_config_t ch1 = {
-        .gpio_num = BSP_PIN_MOTOR_IN1,
+    ledc_channel_config_t ch = {
+        .gpio_num = BSP_PIN_MOTOR_EN,
         .speed_mode = SPEED,
-        .channel = CH_IN1,
+        .channel = CH_EN,
         .timer_sel = TIMER,
         .duty = 0,
         .hpoint = 0,
     };
-    ledc_channel_config_t ch2 = {
-        .gpio_num = BSP_PIN_MOTOR_IN2,
-        .speed_mode = SPEED,
-        .channel = CH_IN2,
-        .timer_sel = TIMER,
-        .duty = 0,
-        .hpoint = 0,
-    };
-    ESP_ERROR_CHECK(ledc_channel_config(&ch1));
-    ESP_ERROR_CHECK(ledc_channel_config(&ch2));
+    ESP_ERROR_CHECK(ledc_channel_config(&ch));
 
     s_ready = true;
-    ESP_LOGI(TAG, "LEDC %d Hz IN1=%d IN2=%d nSLEEP=%d",
-             BSP_MOTOR_PWM_HZ, BSP_PIN_MOTOR_IN1, BSP_PIN_MOTOR_IN2,
+    ESP_LOGI(TAG, "DRV8876 PH/EN %d Hz EN=%d PH=%d nSLEEP=%d",
+             BSP_MOTOR_PWM_HZ, BSP_PIN_MOTOR_EN, BSP_PIN_MOTOR_PH,
              BSP_PIN_MOTOR_NSLEEP);
     return ESP_OK;
 }
@@ -88,10 +79,8 @@ void bsp_motor_coast(void)
     if (!s_ready) {
         return;
     }
-    ledc_set_duty(SPEED, CH_IN1, 0);
-    ledc_update_duty(SPEED, CH_IN1);
-    ledc_set_duty(SPEED, CH_IN2, 0);
-    ledc_update_duty(SPEED, CH_IN2);
+    ledc_set_duty(SPEED, CH_EN, 0);
+    ledc_update_duty(SPEED, CH_EN);
 }
 
 void bsp_motor_set_duty(float duty)
@@ -110,13 +99,8 @@ void bsp_motor_set_duty(float duty)
     }
 
     uint32_t ticks = duty_to_ticks(fabsf(duty));
-    if (duty >= 0.0f) {
-        ledc_set_duty(SPEED, CH_IN1, ticks);
-        ledc_set_duty(SPEED, CH_IN2, 0);
-    } else {
-        ledc_set_duty(SPEED, CH_IN1, 0);
-        ledc_set_duty(SPEED, CH_IN2, ticks);
-    }
-    ledc_update_duty(SPEED, CH_IN1);
-    ledc_update_duty(SPEED, CH_IN2);
+    /* PH=1 正转（与旧双 PWM「IN1 有 PWM」约定一致） */
+    gpio_set_level(BSP_PIN_MOTOR_PH, (duty >= 0.0f) ? 1 : 0);
+    ledc_set_duty(SPEED, CH_EN, ticks);
+    ledc_update_duty(SPEED, CH_EN);
 }

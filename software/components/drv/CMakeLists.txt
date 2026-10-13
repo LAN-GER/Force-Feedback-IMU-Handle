@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS
         "src/bmi088.c"
-        "src/drv8833.c"
+        "src/drv8876.c"
         "src/n20_encoder.c"
     INCLUDE_DIRS
         "include"

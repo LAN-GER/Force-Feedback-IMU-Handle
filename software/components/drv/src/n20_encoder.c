@@ -13,7 +13,7 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-static int32_t s_cpr = 600;
+static int32_t s_cpr = BSP_ENC_OUTPUT_CPR;
 static int s_dir = 1; /* +1 / -1 */
 static int32_t s_prev_counts;
 static int64_t s_prev_us;
@@ -22,7 +22,7 @@ static float s_omega;
 esp_err_t drv_n20_encoder_init(int32_t cpr)
 {
     if (cpr <= 0) {
-        cpr = 600;
+        cpr = BSP_ENC_OUTPUT_CPR;
     }
     s_cpr = cpr;
     bsp_encoder_clear();

@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>FF Handle · USB / Wi-Fi 调试台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23df5a30'/%3E%3Ctext x='9' y='24' font-family='sans-serif' font-size='24' font-weight='bold' fill='white'%3EF%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./"><span class="brand-icon">F<span>F</span></span><span>HANDLE LAB<small>力反馈 IMU 手柄 · USB / Wi-Fi 调试台</small></span></a>
+    <div class="connection"><span id="connection-state" class="badge">未连接</span><button id="demo" class="ghost">演示模式</button><button id="connect" class="primary">选择串口并连接</button><button id="disconnect" hidden>停机并断开</button></div>
+  </header>
+  <main>
+    <div class="intro"><div><span class="eyebrow">LIVE TELEMETRY / ESP32-C3</span><h1>看见每一次运动。</h1><p>六轴 IMU、编码器与电机状态，在一个工作台实时查看。</p></div><div class="device-tag">BMI088 <span>+</span> DRV8876 <span>+</span> N20</div></div>
+    <div id="notice" class="notice" role="status" aria-live="polite">用 Chrome / Edge 打开本地页面，连接原生 USB-Serial/JTAG 口。请先关闭占用串口的 monitor。</div>
+    <section class="serial-entry" aria-label="选择板子连接方式">
+      <div><h2 id="connection-title">USB 串口</h2><p id="port-selection-hint">点击右侧按钮，在浏览器弹窗中选择板子的 COM 端口，然后确认连接。</p></div>
+      <label class="transport-picker" for="transport">连接方式<select id="transport"><option value="usb">USB 串口</option><option value="wifi">Wi-Fi</option></select></label>
+      <div class="serial-actions"><span id="selected-port" class="chip">尚未选择端口</span><button id="choose-port" class="primary" aria-describedby="port-selection-hint">选择串口并连接</button></div>
+      <div id="wifi-connect-fields" class="wifi-fields" hidden><label for="wifi-address">板子 IP / WebSocket 地址<input id="wifi-address" placeholder="192.168.1.100 或 ws://192.168.1.100/ws" autocomplete="off" spellcheck="false"></label><label for="wifi-token">Wi-Fi 接入密钥<input id="wifi-token" type="password" placeholder="通过 USB 读取后自动填入" autocomplete="off" spellcheck="false"></label></div>
+    </section>
+    <details class="wifi-provision"><summary>通过 USB 配置板子 Wi-Fi <span>2.4 GHz · 配置保存到板端</span></summary>
+      <div class="wifi-switch-row"><label class="switch-label"><input id="wifi-enable" type="checkbox" role="switch" disabled>启用板端 Wi-Fi</label><span id="wifi-switch-state" class="footnote">通过 USB 读取状态后可切换</span></div>
+      <form id="wifi-config-form" class="wifi-fields"><label for="wifi-ssid">Wi-Fi 名称 / SSID<input id="wifi-ssid" autocomplete="off" spellcheck="false" placeholder="路由器的 2.4 GHz 网络" required></label><label for="wifi-password">Wi-Fi 密码<input id="wifi-password" type="password" autocomplete="new-password" placeholder="开放网络可留空"></label><button id="configure-wifi" class="primary" disabled>保存 Wi-Fi 配置</button></form>
+      <div class="toolbar-group"><button id="read-wifi" disabled>读取 Wi-Fi 状态 / 地址</button><button id="forget-wifi" disabled>清除 Wi-Fi 配置</button></div>
+      <p id="wifi-status" class="footnote" role="status" aria-live="polite">先通过 USB 连接并配置，或读取已有配置的地址和接入密钥。</p>
+      <p class="footnote">先保存配置，再打开 Wi-Fi 开关。不使用时通过 USB 关闭，释放无线驱动和网络服务，保留账号密码；开关状态在重启后保留。联网后先停机并断开 USB，再选择 Wi-Fi 连接；电脑与板子需在同一局域网。</p>
+    </details>
+    <section class="toolbar" aria-label="采集工具">
+      <div class="toolbar-group"><label for="baud">波特率</label><select id="baud"><option>115200</option><option>460800</option><option>921600</option></select><button id="read-params" data-device disabled>读取参数</button><button id="subscribe" data-device disabled>开始订阅</button><button id="unsubscribe" data-device disabled>暂停订阅</button></div>
+      <div class="toolbar-group"><label for="hz">遥测 Hz</label><select id="hz"><option>10</option><option>25</option><option selected>50</option><option>100</option></select><button id="set-hz" title="修改当前运行频率；重启保留需点击「保存参数至 NVS」" data-device disabled>设置（临时）</button><button id="export" disabled>导出 CSV</button></div>
+    </section>
+    <section class="summary" aria-label="采集状态">
+      <div><span>数据链路</span><strong id="stream-state">等待连接</strong><small id="port-info">USB-Serial/JTAG</small></div>
+      <div><span>接收速率</span><strong><b id="rate">—</b> <small>帧 / s</small></strong><small id="last-frame">尚无遥测</small></div>
+      <div><span>控制模式</span><strong id="mode">—</strong><small id="limit">限幅状态 —</small></div>
+      <div><span>采样序号</span><strong id="seq">—</strong><small id="record-count">已缓存 0 帧</small></div>
+    </section>
+    <div class="workspace">
+      <section class="panel motor-panel">
+        <div class="panel-heading"><div><span class="eyebrow">01 / ACTUATOR</span><h2>电机与编码器</h2></div><span class="chip">PH / EN</span></div>
+        <div class="motor-overview"><div class="dial"><svg viewBox="0 0 160 160" role="img" aria-label="编码器输出轴角度"><circle cx="80" cy="80" r="66" class="dial-track"/><path d="M80 9v12 M151 80h-12 M80 151v-12 M9 80h12" class="dial-ticks"/><g id="dial-needle"><path d="M80 80V29" class="needle"/><circle cx="80" cy="80" r="6"/></g></svg><span>输出轴角度</span></div><div class="motor-numbers"><span>角度</span><strong><b id="theta-deg">—</b><small> °</small></strong><span id="theta-rad">— rad</span><div class="pair"><span>角速度 <b id="omega">—</b> rad/s</span><span>累计计数 <b id="counts">—</b></span></div></div></div>
+        <div class="motor-metrics"><div><span>PWM 占空比</span><strong id="duty">—</strong></div><div><span>实测电流 / A</span><strong id="i_meas">—</strong></div><div><span>目标电流 / A</span><strong id="i_des">—</strong></div><div><span>位置误差 / rad</span><strong id="pid_err">—</strong></div></div>
+        <div class="chart-header"><h3>电流趋势 <span>A</span></h3><div class="legend"><span class="x">实测</span><span class="y">目标</span></div></div><canvas id="current-chart" aria-label="电流实测值和目标值曲线" role="img"></canvas>
+        <div class="chart-header"><h3>位置跟踪 <span>° · 目标仅在位置 PID 模式显示</span></h3><div class="legend"><span class="x">位置</span><span class="y">目标</span></div></div><canvas id="position-chart" aria-label="编码器角度与位置闭环目标曲线" role="img"></canvas>
+        <div class="torque-grid"><div><span>目标力矩</span><b id="tau_des">—</b></div><div><span>实测力矩</span><b id="tau_meas">—</b></div><div><span>DOB 电机力矩</span><b id="tau_m_hat">—</b></div><div><span>DOB 外力矩</span><b id="tau_ext_hat">—</b></div></div>
+        <p class="footnote">力矩单位 N·m。电流符号由 PWM 方向合成；力矩精度依赖 Kt 标定。</p>
+      </section>
+      <section class="panel controls-panel">
+        <div class="panel-heading"><div><span class="eyebrow">02 / CONTROL</span><h2>板端控制</h2></div><button id="stop" class="danger" data-device disabled>停止电机</button></div>
+        <div class="control-status"><span id="motor-control-state" class="badge">等待板端状态</span><span id="motor-command-state" role="status" aria-live="polite">选择模式只切换表单，点击发送才生效。</span></div>
+        <div id="mode-picker" class="mode-picker" role="group" aria-label="选择待操作的电机控制模式">
+          <button type="button" data-mode="0" aria-pressed="true"><b>开环 PWM</b><small>直接控制方向与占空比</small></button>
+          <button type="button" data-mode="1" aria-pressed="false"><b>阻抗力反馈</b><small>弹簧刚度与运动阻尼</small></button>
+          <button type="button" data-mode="2" aria-pressed="false"><b>位置 PID</b><small>编码器角度闭环</small></button>
+          <button type="button" data-mode="3" aria-pressed="false"><b>力矩 / 电流 PI</b><small>电流反馈控制输出力矩</small></button>
+        </div>
+        <p id="mode-description" class="mode-description"></p>
+        <div id="openloop-controls">
+          <form id="duty-form"><label for="duty-input">开环占空比 <span>−1 ~ 1</span></label><div class="input-action"><input id="duty-input" type="number" min="-1" max="1" step="0.01" value="0" required><button class="primary" data-device disabled>发送 PWM</button></div><div class="duty-range"><input id="duty-slider" aria-label="待发送 PWM 百分比" type="range" min="-100" max="100" step="1" value="0"><output id="duty-preview">0%</output></div></form>
+          <div class="toolbar-group"><button id="reverse-duty" type="button">反向目标</button><span class="footnote">滑块与反向按钮只修改待发送值。</span></div>
+        </div>
+        <form id="mode-form" novalidate hidden>
+          <div id="angle-tools" class="toolbar-group"><label for="angle-unit">角度单位</label><select id="angle-unit"><option value="deg">度 °</option><option value="rad">弧度 rad</option></select><button id="use-current-angle" type="button" data-device disabled>以当前位置为目标</button></div>
+          <div id="mode-angle-fields" class="param-fields"></div>
+          <div id="impedance-fields" class="param-fields" hidden></div>
+          <div id="position-fields" class="param-fields" hidden></div>
+          <div id="torque-fields" class="param-fields" hidden></div>
+          <div id="current-tools" hidden><label for="current-target">也可输入目标电流 / A</label><div class="input-action"><input id="current-target" type="number" step="any" value="0"><button id="convert-current" type="button">换算为目标力矩</button></div><p id="torque-preview" class="footnote"></p></div>
+          <div id="mode-pwm-fields" class="param-fields"></div>
+          <p id="mode-draft-state" class="footnote">等待读取板端参数。</p>
+          <button id="apply-mode" class="primary" data-device disabled>启动 / 更新所选模式</button>
+        </form>
+        <div class="aux-controls"><form id="heater-form"><label for="heater-input">IMU 加热占空比 <span>0 ~ 1</span></label><div class="input-action"><input id="heater-input" type="number" min="0" max="1" step="0.01" value="0" required><button data-device disabled>设置加热</button></div></form></div>
+        <div class="toolbar-group"><button id="zero" data-device disabled>编码器清零</button><button id="save" aria-describedby="nvs-help nvs-status" data-device disabled>保存参数至 NVS</button></div>
+        <p id="nvs-help" class="footnote">修改参数和遥测频率只在当前运行生效。点击保存，将板端已应用的参数写入断电存档，重启后恢复；尚未发送的表单修改不会保存。存档包括遥测频率、滤波开关、编码器、控制模式、目标及加热参数；开环 PWM 占空比不存档。</p>
+        <p id="nvs-status" class="nvs-status" data-state="idle" role="status" aria-live="polite">本次连接尚未执行 NVS 保存。</p>
+        <details><summary>编码器、DOB 与其他参数 <span>修改项保持当前控制模式</span></summary><form id="params-form"><div id="param-fields" class="param-fields"></div><h3>DOB 扰动观测器</h3><div id="dob-fields" class="param-fields"></div><button class="primary" data-device disabled>发送修改参数</button><span id="param-state" class="footnote">尚未读取参数</span></form></details>
+      </section>
+      <section class="panel imu-panel">
+        <div class="panel-heading"><div><span class="eyebrow">03 / INERTIAL</span><h2>IMU 六轴数据</h2></div><span id="imu-status" class="badge">等待数据</span></div>
+        <div class="filter-controls">
+          <label class="switch-label"><input id="imu-filter-enable" type="checkbox" role="switch" data-device disabled>板端卡尔曼滤波</label>
+          <label class="switch-label"><input id="imu-filter-compare" type="checkbox" role="switch" checked>显示滤波前后对比</label>
+        </div>
+        <p id="imu-filter-command" class="footnote" role="status" aria-live="polite">连接并读取参数后可切换滤波。</p>
+        <p id="imu-filter-status" class="footnote" role="status">等待滤波数据</p>
+        <div class="axes-grid"><div><h3>加速度 <span>g</span></h3><div id="acc-values" class="axis-values"></div></div><div><h3>角速度 <span>°/s</span></h3><div id="gyro-values" class="axis-values"></div></div></div>
+        <div class="toolbar-group"><button id="read-diag" data-device disabled>读取诊断</button><button id="probe-spi" data-device disabled>探测 SPI</button><span id="imu-ids" class="footnote">芯片 ID 尚未收到</span></div>
+        <p id="diagnostics" class="footnote" role="status">读取诊断可查询初始化结果，无需抓取开机日志。</p>
+        <pre id="spi-probe" class="footnote" role="status" style="white-space:pre-wrap;overflow-wrap:anywhere">IMU 初始化失败时，可探测不同 SPI 速率、模式与 MISO 弱上/下拉。</pre>
+        <div class="chart-header"><h3>加速度趋势 <span>最近 10 秒 · g</span></h3><div class="legend"><span class="x">X</span><span class="y">Y</span><span class="z">Z</span></div></div><canvas id="acc-chart" aria-label="加速度三轴实时曲线" role="img"></canvas>
+        <div class="chart-header"><h3>角速度趋势 <span>°/s</span></h3></div><canvas id="gyro-chart" aria-label="角速度三轴实时曲线" role="img"></canvas>
+        <p id="imu-filter-legend" class="footnote">同色为同一轴：虚线是原始值，实线是卡尔曼值。滤波在板端运行，姿态预览由网页计算。</p>
+      </section>
+      <section class="panel imu-kalman-panel">
+        <div class="panel-heading"><div><span class="eyebrow">04 / KALMAN</span><h2>板端卡尔曼滤波波形</h2></div><span id="imu-kalman-status" class="badge">等待数据</span></div>
+        <p class="footnote">单独显示滤波后的六轴波形，使用上方「板端卡尔曼滤波」开关控制；最近 10 秒。</p>
+        <div class="kalman-charts">
+          <div><div class="chart-header"><h3>滤波后加速度 <span>g</span></h3><div class="legend"><span class="x">X</span><span class="y">Y</span><span class="z">Z</span></div></div><canvas id="acc-filtered-chart" aria-label="板端卡尔曼滤波后的三轴加速度曲线" role="img"></canvas></div>
+          <div><div class="chart-header"><h3>滤波后角速度 <span>°/s</span></h3><div class="legend"><span class="x">X</span><span class="y">Y</span><span class="z">Z</span></div></div><canvas id="gyro-filtered-chart" aria-label="板端卡尔曼滤波后的三轴角速度曲线" role="img"></canvas></div>
+        </div>
+        <p class="footnote">关闭滤波或 IMU 数据无效时停止绘制新点，已接收的有效波形保留在历史窗口内。</p>
+      </section>
+      <section class="panel attitude-panel">
+        <div class="panel-heading"><div><span class="eyebrow">05 / ORIENTATION</span><h2>IMU 三轴姿态预览</h2></div><span id="attitude-status" class="badge">等待数据</span></div>
+        <div class="attitude-layout">
+          <div class="cube-scene" role="img" aria-label="随 IMU 三轴姿态转动的三维方块">
+            <div class="cube-shadow"></div>
+            <div class="cube-camera"><div id="imu-cube" class="imu-cube">
+              <div class="cube-face cube-front"><span>+Y</span><small>前</small></div>
+              <div class="cube-face cube-back"><span>−Y</span><small>后</small></div>
+              <div class="cube-face cube-right"><span>+X</span><small>右</small></div>
+              <div class="cube-face cube-left"><span>−X</span><small>左</small></div>
+              <div class="cube-face cube-top"><span>+Z</span><small>上</small></div>
+              <div class="cube-face cube-bottom"><span>−Z</span><small>下</small></div>
+            </div></div>
+            <span class="cube-scene-label">传感器坐标 · X / Y / Z</span>
+          </div>
+          <div class="attitude-readout">
+            <span id="attitude-source" class="chip">等待板端四元数 [w,x,y,z]</span>
+            <div class="attitude-angles">
+              <div><span class="x">X · 横滚 Roll</span><strong><b id="attitude-roll">—</b><small> °</small></strong></div>
+              <div><span class="y">Y · 俯仰 Pitch</span><strong><b id="attitude-pitch">—</b><small> °</small></strong></div>
+              <div><span class="z">Z · 相对航向 Yaw</span><strong><b id="attitude-yaw">—</b><small> °</small></strong></div>
+            </div>
+            <button id="attitude-zero" type="button" disabled>以当前姿态归零</button>
+            <p id="attitude-reference" class="footnote" role="status">板端四元数：倾斜参考重力，航向从板端姿态初始化起累计。</p>
+            <p class="footnote">优先使用板端卡尔曼数据。航向是相对角度，长时间会漂移；姿态归零仅调整预览参考。</p>
+          </div>
+        </div>
+      </section>
+      <section class="panel console-panel">
+        <div class="panel-heading"><div><span class="eyebrow">06 / CONSOLE</span><h2>通信日志</h2></div><button id="clear-log" class="ghost">清空</button></div>
+        <div class="console-options"><label><input id="show-telem" type="checkbox">显示遥测原文</label><span id="command-state" role="status" aria-live="polite">等待命令</span></div>
+        <pre id="log" tabindex="0" aria-label="串口通信日志"></pre>
+        <form id="raw-form" class="input-action"><label for="raw-input" class="sr-only">JSON 命令</label><input id="raw-input" value='{"cmd":"get"}' autocomplete="off" spellcheck="false"><button data-device disabled>发送 JSON</button></form>
+      </section>
+    </div>
+    <details class="help"><summary>连接说明与字段说明</summary><p>通过本地 HTTP 服务打开页面，在桌面 Chrome / Edge 中点击「选择串口并连接」，在浏览器自带的端口选择弹窗中选择板子的 USB 串口。首次访问需要通过该弹窗授权端口。连接后自动发送 get 和 sub，不更改电机控制参数。无数据时检查固件、USB 接口和串口占用；波特率可先用 115200。</p><p>暂停订阅只停止遥测。停机并断开会依次发送 duty=0、heater=0、unsub，再释放串口。拔线或关闭页面无法保证电机停机，请先点击停止电机。板端未提供温度、故障引脚或固件版本遥测，因此页面不会显示这些值。</p><p>CSV 记录最近 30,000 帧（50 Hz 时约 10 分钟），时间为浏览器接收时间。参数仅在收到板端回复后确认；get 超时可检查固件 USB JSON 发送缓冲大小。演示数据标记为模拟，退出演示后清除。</p></details>
+    <footer><span>FF HANDLE / LOCAL WORKBENCH</span><span>数据保存在当前浏览器会话 · 无外部依赖</span></footer>
+  </main>
+</body>
+</html>

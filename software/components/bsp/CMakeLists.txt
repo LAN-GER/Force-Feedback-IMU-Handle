@@ -5,6 +5,7 @@ idf_component_register(
         "src/bsp_usb.c"
         "src/bsp_spi.c"
         "src/bsp_motor_pwm.c"
+        "src/bsp_adc_current.c"
         "src/bsp_heater.c"
         "src/bsp_encoder.c"
         "src/bsp_ws2812.c"
@@ -15,6 +16,7 @@ idf_component_register(
         esp_driver_spi
         esp_driver_ledc
         esp_driver_rmt
+        esp_adc
         driver
         freertos
         esp_rom

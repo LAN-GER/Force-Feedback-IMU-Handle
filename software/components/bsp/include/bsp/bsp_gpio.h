@@ -14,7 +14,8 @@ bool bsp_user_btn_pressed(void);
 
 void bsp_user_led_pulse(void);
 void bsp_console_activity_poll(void);
-void bsp_console_tx_lock(void);
+/** Returns false if the TX lock could not be acquired; do not write/unlock then. */
+bool bsp_console_tx_lock(void);
 void bsp_console_tx_unlock(void);
 
 #ifdef __cplusplus

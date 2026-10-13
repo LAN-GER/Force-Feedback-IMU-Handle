@@ -9,6 +9,9 @@ extern "C" {
 
 typedef void (*bsp_usb_line_cb_t)(const char *line, void *ctx);
 
+/* Shared capacity for APP JSON payloads, including their terminating NUL. */
+#define BSP_USB_JSON_CAPACITY 1024
+
 void bsp_usb_set_line_cb(bsp_usb_line_cb_t cb, void *ctx);
 esp_err_t bsp_usb_init(void);
 void bsp_usb_poll(void);

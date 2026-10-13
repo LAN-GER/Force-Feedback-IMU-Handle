@@ -25,11 +25,12 @@ static int64_t s_led_off_us;
 static vprintf_like_t s_prev_vprintf;
 static SemaphoreHandle_t s_tx_mux;
 
-void bsp_console_tx_lock(void)
+bool bsp_console_tx_lock(void)
 {
     if (s_tx_mux) {
-        xSemaphoreTake(s_tx_mux, pdMS_TO_TICKS(500));
+        return xSemaphoreTake(s_tx_mux, pdMS_TO_TICKS(100)) == pdTRUE;
     }
+    return true;
 }
 
 void bsp_console_tx_unlock(void)
@@ -42,7 +43,9 @@ void bsp_console_tx_unlock(void)
 static int console_vprintf(const char *fmt, va_list args)
 {
     bsp_user_led_pulse();
-    bsp_console_tx_lock();
+    if (!bsp_console_tx_lock()) {
+        return 0;
+    }
     int n;
     if (s_prev_vprintf) {
         n = s_prev_vprintf(fmt, args);
@@ -74,6 +77,9 @@ esp_err_t bsp_gpio_init(void)
 #endif
 
     s_tx_mux = xSemaphoreCreateMutex();
+    if (!s_tx_mux) {
+        return ESP_ERR_NO_MEM;
+    }
     s_prev_vprintf = esp_log_set_vprintf(console_vprintf);
     return ESP_OK;
 }

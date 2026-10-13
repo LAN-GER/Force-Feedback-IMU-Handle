@@ -1,48 +1,124 @@
 # 快速上手
 
-## 环境
+## 环境与硬件
 
-- ESP-IDF **6.x**（与 CAN_Magnetic_Encoder 一致，当前建议 v6.0.2）
-- 目标芯片：`esp32c3`
+- ESP-IDF 6.x；当前工程已使用 v6.0.2 编译，目标 `esp32c3`。
+- ESP32-C3FH4、BMI088、DRV8876 PH/EN + IPROPI、GA12-N20 编码减速电机；本板无 RGB。
+- 网页使用桌面 Chrome／Edge 的 Web Serial，通过 Python 启动本机静态服务，无需 npm 安装。
 
-## 编译烧录
+接线见 [硬件引脚表](../hardware/pinmap.md)。电机 VM=5 V，逻辑与编码器为 3.3 V，地相连。GPIO4 接 IPROPI，GPIO9 为 BOOT／用户键。
+
+## 编译和烧录
+
+在本工程所用 ESP-IDF 的 Windows 环境中执行；安装位置或端口不同请替换：
 
 ```powershell
-cd E:\SeeedWork\Force-Feedback-IMU-Handle
-idf.py set-target esp32c3
+. 'C:/Espressif/tools/Microsoft.v6.0.2.PowerShell_profile.ps1'
+cd E:/SeeedWork/Force-Feedback-IMU-Handle
 idf.py build
-idf.py -p COMx flash monitor
+idf.py -p COM3 flash
 ```
 
-## 期望日志
+构建入口在仓库根目录，产物为 `build/ff_imu_handle.bin`。烧录前在网页点「停机并断开」，并关闭其他占用串口的程序。查看日志可使用 `idf.py -p COM3 monitor`，按 Ctrl+] 退出后再连接网页。
+
+正常启动日志包含下列内容，前缀和顺序可能不同：
 
 ```text
-bsp_spi: SPI Mode3 8000000 Hz CS_ACC=5 CS_GYRO=7
-bsp_motor: LEDC 20000 Hz ...
-bsp_enc: PCNT quad ENC_A=0 ENC_B=1
+app: 力反馈 IMU 手柄启动 (DRV8876 / ESP32-C3)
+bsp_motor: DRV8876 PH/EN 20000 Hz EN=2 PH=3 nSLEEP=20
+bsp_i: IPROPI ADC1_CH4 R=2200 ohm ...
 bmi088: acc_id=0x1E gyro_id=0x0F
-app: 力反馈 IMU 手柄启动
+app_usb: USB JSON ready (get/sub), payload_capacity=1024
 ```
 
-## USB 联调
+## 连接网页
 
-串口发送（每行一条）：
+在仓库根目录执行：
 
-```json
-{"cmd":"get"}
-{"cmd":"duty","v":0.2}
-{"cmd":"zero"}
-{"cmd":"set","ff_enable":1,"k":0.8,"theta_des":0}
-{"cmd":"sub"}
+```powershell
+python tools/serve.py
 ```
 
-应答行以 `>>` 开头，见 [`protocol/usb_protocol.md`](../protocol/usb_protocol.md)。
+1. 在桌面 Chrome／Edge 打开 <http://localhost:8776>。
+2. 点击「选择串口并连接」，在浏览器弹窗选中板子的实际 COM 端口；首次连接需要授权。
+3. 查看 `get`、`sub` 确认回复和接收帧率；参数、曲线应开始更新。
+4. 无板时可进入「演示模式」，连接实板前先退出演示。
+
+端口选择位于「USB 串口」区域及顶部；页面不会直接列出未经授权的所有端口。服务只监听本机，端口冲突时可执行 `python tools/serve.py --port 8777`。连接后只读取参数和订阅遥测，不自动改变已有控制模式。
+
+## 遥测频率与保存
+
+没有 NVS 存档时，上电默认 50 Hz；已有存档时使用保存的频率。网页可选择至 100 Hz，板端命令允许 1～200 Hz，参数上限不代表所有连接和负载下都能达到。
+
+1. 连接后点击「读取参数」，确认当前遥测频率。
+2. 选择 100 Hz，点击「设置（临时）」；收到确认后观察「接收速率」，该数值按实际收到的完整遥测帧统计。
+3. 需要重启后保留时，点击「保存参数至 NVS」，等待带时间的保存成功提示。此操作保存全部当前板端参数；尚未发送的表单修改不会一起写入。
+4. 重启、重新连接并「读取参数」，核对保存值。更换固件后用 `Ctrl+F5` 刷新网页。
+
+若配置值正确但帧率偏低，点击「读取诊断」，比较总耗时与周期（100 Hz 为 10 ms），再查看快照、组包、USB 写入、Wi-Fi 入队的分段耗时及跳过通知增量。当前版本已优化定时调度和组包，本板 USB 问题已由用户确认解决，见 [验证记录](firmware.md#遥测验证记录)。
+
+## 首次联调
+
+需要无线操作时，先通过 USB 展开「通过 USB 配置板子 Wi-Fi」，输入 2.4 GHz 网络名称和密码并保存，再打开「启用板端 Wi-Fi」开关。等待显示 IP 后，停机并断开，选择「Wi-Fi」连接；地址与接入密钥自动填入。不使用时连接 USB 关闭开关，确认资源已释放；配置保留，重启恢复开关状态。重新打开网页可先用 USB 读取 Wi-Fi 状态；详细步骤与排查见 [Wi-Fi 说明](wifi.md)。无线掉线不能保证停机。
+
+先停止电机并关闭加热，再检查 IMU、编码器和电流。`save` 保存当前模式、目标及加热参数；IMU 初始化成功时上电会恢复这些设置，开环占空比则不存档。
+
+| 步骤 | 操作与预期 |
+|------|------------|
+| IMU | 有效状态下静止加速度模长约 1 g，移动时三轴数据变化；`imu_ok=0` 时不要把零值视为实测 |
+| 编码器 | 「读取参数」确认默认 `enc_cpr=8344`；停机后清零，输出轴完整一圈应约 360° |
+| 标定 | 默认按 7 PPR × 4 × 298；7 PPR 由粗测推断。多圈累计计数除以圈数可进一步标定 |
+| 电流 | 用小开环 PWM 验证方向和 `i_meas`，再核对电流比例及 Kt |
+| 闭环 | 选择阻抗、位置 PID 或力矩／电流 PI，检查目标和限幅后点击发送启动 |
+| 结束 | 点击「停机并断开」；需要下次上电停机时，先停机、关闭加热再保存参数 |
+
+默认位置软限位为 −1.5～1.5 rad，用于阻抗及位置模式。力矩模式不执行角度软限位；开环 PWM 不受闭环 `duty_max` 限制。详细操作见 [网页工具说明](../tools/README.md)。
+
+## IMU 滤波与预览
+
+「板端卡尔曼滤波」开关发送 `imu_filter`，默认开启；「显示滤波前后对比」只改变网页显示。对比图原始值为虚线、滤波值为实线，独立的「板端卡尔曼滤波波形」面板始终保留。点击保存可保存板端滤波开关。
+
+「IMU 三轴姿态预览」直接显示板端 `quat=[w,x,y,z]` 四元数，网页仅将它换算为显示用横滚、俯仰、相对航向。板端优先用有效卡尔曼六轴融合，关闭滤波时用原始六轴；航向可能漂移。「以当前姿态归零」只改变网页参考，不清零编码器或板端姿态。暂停或断开时预览冻结，旧固件没有四元数时提示更新固件。
+
+## USB 命令示例
+
+每条 JSON 独占一行，回复可能带 `>>` 前缀。以下是独立操作示例，闭环命令会立即启用相应模式：
+
+| 用途 | 命令 |
+|------|------|
+| 读取参数／诊断 | `{"cmd":"get"}` / `{"cmd":"diag"}` |
+| 订阅／取消订阅 | `{"cmd":"sub"}` / `{"cmd":"unsub"}` |
+| 停机／清零 | `{"cmd":"duty","v":0}` / `{"cmd":"zero"}` |
+| 设置遥测频率 | `{"cmd":"set","telem_hz":100}`；重启保留需另发 `{"cmd":"save"}` |
+| 设置每转计数 | `{"cmd":"set","enc_cpr":8344}` |
+| 卡尔曼开关 | `{"cmd":"imu_filter","v":1}`；关闭为 `v:0` |
+| 位置 PID | `{"cmd":"set","ctrl_mode":2,"theta_des":0.3,"pid_kp":2,"pid_ki":0.5,"pid_kd":0.05}` |
+| 力矩／电流 PI | `{"cmd":"set","ctrl_mode":3,"tau_des":0.001,"kt":0.02,"i_max":0.1,"duty_max":0.2}` |
+| 阻抗 | `{"cmd":"set","ctrl_mode":1,"k":0.5,"b":0.05,"theta_des":0,"duty_max":0.2}` |
+| 关闭加热／保存 | `{"cmd":"heater","v":0}` / `{"cmd":"save"}` |
+
+角度单位 rad，角速度 rad/s，IMU 角速度 °/s；模式和字段见 [USB 协议](../protocol/usb_protocol.md)。
 
 ## 故障排查
 
-| 现象 | 检查 |
-|------|------|
-| Acc/Gyro ID 不对 | CS 接线、SPI Mode3、MISO 是否误接 GPIO9 |
-| 编码器不动 | A/B 上拉、编码器 VCC=3.3 V、共地 |
-| 电机不转 | nSLEEP=高、VM 电源、`duty`/`ff_enable` |
-| USB 无 JSON | 确认 USB-Serial/JTAG 口，而非 UART0 |
+| 现象 | 检查与处理 |
+|------|------------|
+| 找不到串口选择入口 | 使用桌面 Chrome／Edge、localhost，退出演示；检查 JavaScript 是否加载成功 |
+| 端口被占用 | 关闭 IDF monitor、其他终端或另一网页连接 |
+| get/sub 超时 | 确认端口及 `USB JSON ready`；释放串口后运行诊断脚本 |
+| `The device has been lost` | 主动拔线、复位或烧录会触发；结合实际操作和启动日志判断 |
+| IMU 芯片 ID 不匹配 | 检查 VDD/VDDIO、共地、PS 接地、双片选、SDO1/SDO2 共接 MISO 及焊接；SPI 返回 ESP_OK 仅表示主控传输完成 |
+| 编码器不动或比例错误 | 检查 A/B、上拉、供电、方向及当前 `enc_cpr`；用输出轴多圈实测校验 |
+| 遥测重启后恢复旧频率 | 「设置（临时）」后还需保存 NVS，并收到保存确认 |
+| 配置 100 Hz、接收约 50 帧/s | 更新当前固件并刷新网页；读取总耗时及四段耗时，核对跳过通知增量，见 [遥测设置](#遥测频率与保存) |
+| 电机不转 | 检查 VM、nSLEEP、PH/EN 接线和当前模式／目标／PWM |
+| 电流为零或比例异常 | 检查 IPROPI→GPIO4、2.2 kΩ 下拉及 ADC；核对电流后再启动力矩闭环 |
+
+在网页「停机并断开」、关闭 monitor 后，在带 pyserial 的 Python 环境执行；ESP-IDF Python 环境通常已提供该模块：
+
+```powershell
+python tools/usb_probe.py --list
+python tools/usb_probe.py --port COM3 --diag
+```
+
+脚本仅发送 `get`、`sub`、`diag`、`unsub`，不主动复位或发送电机／加热命令。正常应有 `get_ack=True`、`sub_ack=True` 和遥测帧。IMU 初始化失败时当前固件继续运行 USB，启动时关闭闭环和加热；「读取诊断」查看缓存错误，「探测 SPI」在初始化失败时检查模式和速率。修好供电、接线或焊接后需复位重新初始化。诊断解释见 [工具说明](../tools/README.md#getsub-超时诊断)。

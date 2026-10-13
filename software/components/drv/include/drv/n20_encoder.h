@@ -15,7 +15,8 @@ typedef struct {
 
 /**
  * @param cpr 输出轴每转正交计数 = motor_ppr * 4 * gear_ratio
- *            默认：3 PPR * 4 * 50 = 600
+ *            默认：7 PPR * 4 * 298 = 8344（7 PPR 由粗测推断，待实物规格确认）
+ *            cpr 已包含减速比，换算时不要再次除以 298。
  */
 esp_err_t drv_n20_encoder_init(int32_t cpr);
 void drv_n20_encoder_set_cpr(int32_t cpr);
