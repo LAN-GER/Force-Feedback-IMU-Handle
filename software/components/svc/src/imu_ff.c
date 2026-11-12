@@ -7,12 +7,12 @@
 #include "svc/imu_ff.h"
 #include "svc/params.h"
 #include "svc/imu_kalman.h"
-#include "svc/imu_attitude.h"
 #include "esp_timer.h"
 #include "drv/drv8876.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <math.h>
+#include <stdatomic.h>
 #include <string.h>
 
 /* 由 app 层维护的全局参数 */
@@ -24,16 +24,43 @@ static float s_openloop_duty;
 static float s_duty_for_sign;
 static imu_kalman_t s_imu_kalman;
 static imu_attitude_t s_attitude;
+static imu_gyro_cal_t s_gyro_cal;
+static imu_gyro_bias_t s_manual_gyro_bias; /* Snapshot protected by s_mux. */
+static atomic_int s_cal_status;
+enum { GYRO_CAL_QUEUED = -1 };
 
-esp_err_t svc_imu_ff_init(void)
+esp_err_t svc_imu_ff_init(const imu_gyro_bias_t *saved_bias)
 {
     s_mux = xSemaphoreCreateMutex();
+    if (!s_mux) return ESP_ERR_NO_MEM;
     s_tel = (svc_telemetry_t){0};
     s_openloop_duty = 0.0f;
     s_duty_for_sign = 0.0f;
     imu_kalman_reset(&s_imu_kalman);
     imu_attitude_reset(&s_attitude);
+    s_manual_gyro_bias = (imu_gyro_bias_t){0};
+    if (imu_attitude_restore_gyro_bias(&s_attitude, saved_bias)) {
+        s_manual_gyro_bias = *saved_bias;
+    }
+    atomic_store(&s_cal_status, IMU_GYRO_CAL_IDLE);
     return ESP_OK;
+}
+
+void svc_imu_ff_request_gyro_cal(void)
+{
+    int status = atomic_load(&s_cal_status);
+    while (status != GYRO_CAL_QUEUED && status != IMU_GYRO_CAL_RUNNING) {
+        if (atomic_compare_exchange_weak(&s_cal_status, &status, GYRO_CAL_QUEUED)) return;
+    }
+}
+
+imu_gyro_cal_status_t svc_imu_ff_get_gyro_calibration(imu_gyro_bias_t *bias)
+{
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    *bias = s_manual_gyro_bias;
+    int status = atomic_load(&s_cal_status);
+    xSemaphoreGive(s_mux);
+    return status == GYRO_CAL_QUEUED ? IMU_GYRO_CAL_RUNNING : (imu_gyro_cal_status_t)status;
 }
 
 void svc_imu_ff_set_openloop_duty(float duty)
@@ -64,11 +91,30 @@ void svc_imu_ff_on_sample(void)
     float filtered[6];
     bool kf_en = g_params.imu_kf_en != 0;
     int64_t now_us = esp_timer_get_time();
+    int cal_status = atomic_load(&s_cal_status);
+    if (cal_status == GYRO_CAL_QUEUED) {
+        imu_gyro_cal_begin(&s_gyro_cal, now_us);
+        atomic_store(&s_cal_status, IMU_GYRO_CAL_RUNNING);
+        cal_status = IMU_GYRO_CAL_RUNNING;
+    }
+    if (cal_status == IMU_GYRO_CAL_RUNNING) {
+        imu_gyro_cal_status_t result = imu_gyro_cal_step(&s_gyro_cal, &s_attitude, raw, imu_ok, imu.acc_new, now_us);
+        if (result == IMU_GYRO_CAL_DONE) {
+            /* Publish the measured triple before the adaptive tilt loop changes it. */
+            xSemaphoreTake(s_mux, portMAX_DELAY);
+            memcpy(s_manual_gyro_bias.rad_s, s_attitude.gyro_bias_rad_s, sizeof(s_manual_gyro_bias.rad_s));
+            s_manual_gyro_bias.valid = true;
+            atomic_store(&s_cal_status, result);
+            xSemaphoreGive(s_mux);
+        } else if (result != IMU_GYRO_CAL_RUNNING) {
+            atomic_store(&s_cal_status, result);
+        }
+    }
     bool kf_ready = imu_kalman_step(&s_imu_kalman, raw, imu_ok, kf_en,
                                   imu.acc_new, now_us, filtered);
     float quaternion[4];
-    bool quaternion_ok = imu_attitude_step(&s_attitude, kf_ready ? filtered : raw,
-                                           imu_ok, now_us, quaternion);
+    bool quaternion_ok = imu_attitude_step(&s_attitude, raw, kf_ready ? filtered : NULL,
+                                           imu_ok, imu.acc_new, now_us, quaternion);
     (void)drv_n20_encoder_update(&enc);
 
     /* 先读电流（用上一步 duty 符号） */

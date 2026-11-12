@@ -54,6 +54,13 @@ async function injectMock(page) {
           if (value.cmd === 'zero') counts = 0;
           if (value.cmd === 'set') { Object.assign(mock.params, value); delete mock.params.cmd; }
           if (mock.drop.has(value.cmd)) return;
+          if (value.cmd === 'imu_gyro_cal' || value.cmd === 'imu_gyro_cal_status') {
+            const gyro_cal = value.cmd === 'imu_gyro_cal' ? 'running' : mock.gyroCalResult || 'running';
+            if (!mock.oldGyroCal && gyro_cal === 'done') mock.gyroBias = 'unsaved';
+            if (mock.oldGyroCal) reply({ t: 'err', cmd: value.cmd, msg: 'unknown' });
+            else reply({ t: 'ok', cmd: value.cmd, gyro_cal, gyro_bias: mock.gyroBias || 'none' });
+            return;
+          }
           if (value.cmd === 'save' && mock.rejectSave) {
             reply({ t: 'err', cmd: 'save', msg: 'nvs' }); return;
           }
@@ -61,6 +68,7 @@ async function injectMock(page) {
             mock.releaseSave = () => { reply({ t: 'ok', cmd: 'save' }); mock.holdSave = false; };
             return;
           }
+          if (value.cmd === 'save' && mock.gyroBias === 'unsaved') mock.gyroBias = 'saved';
           if (value.cmd === 'set' && mock.holdSet) {
             const held = { t: 'ok', cmd: 'set', live: { ...mock.params } };
             mock.releaseSet = () => { reply(held); mock.holdSet = false; };
@@ -84,7 +92,9 @@ async function injectMock(page) {
             return;
           }
           if (value.cmd === 'unknown') reply({ t: 'err', cmd: value.cmd, msg: 'unknown' });
-          else reply({ t: 'ok', cmd: value.cmd, ...(['get', 'set', 'heater', 'imu_filter'].includes(value.cmd) ? { live: { ...mock.params } } : {}) });
+          else reply({ t: 'ok', cmd: value.cmd,
+            ...(['get', 'set', 'heater', 'imu_filter'].includes(value.cmd) ? { live: { ...mock.params } } : {}),
+            ...(['get', 'save'].includes(value.cmd) && mock.quatSupported ? { gyro_bias: mock.gyroBias || 'none' } : {}) });
         } }),
         open: async () => { controller.enqueue(encoder.encode('I (2) app: 手柄启动 <img src=x onerror=alert(1)>\r\n')); },
         close: async () => {
@@ -150,6 +160,31 @@ async function injectMock(page) {
     assert.notEqual(await page.locator('#imu-cube').getAttribute('style'), cubeBefore);
     await page.evaluate(() => { delete __mock.acc; delete __mock.accFiltered; delete __mock.gyro; delete __mock.gyroFiltered; });
     checks.push('IMU 3D 方块直接使用板端四元数，在六轴静止时仍跟随板端姿态；显示归零不发送命令');
+
+    await page.click('#gyro-cal');
+    await page.waitForFunction(() => document.querySelector('#gyro-cal-status').textContent.includes('正在校准'));
+    assert.equal(await page.locator('#gyro-cal').isDisabled(), true);
+    assert.equal(await page.locator('#stop').isDisabled(), false);
+    await page.evaluate(() => { __mock.gyroCalResult = 'done'; });
+    await page.waitForFunction(() => document.querySelector('#gyro-cal-status').textContent.includes('校准成功'));
+    assert.ok((await page.locator('#gyro-bias-storage').textContent()).includes('尚未保存'));
+    assert.ok(await page.evaluate(() => __mock.commands.some(command => command.cmd === 'imu_gyro_cal_status')));
+    assert.ok((await page.locator('#attitude-reference').textContent()).includes('已以当前姿态归零'));
+    await page.evaluate(() => { __mock.rejectSave = true; });
+    await page.click('#save');
+    await page.waitForFunction(() => document.querySelector('#nvs-status').dataset.state === 'error');
+    assert.ok((await page.locator('#gyro-bias-storage').textContent()).includes('尚未保存'));
+    await page.evaluate(() => { __mock.rejectSave = false; });
+    await page.click('#save');
+    await page.waitForFunction(() => document.querySelector('#gyro-bias-storage').textContent.includes('已保存在 NVS'));
+    await page.evaluate(() => { __mock.gyroCalResult = 'motion'; });
+    await page.click('#gyro-cal');
+    await page.waitForFunction(() => document.querySelector('#gyro-cal-status').textContent.includes('检测到运动'));
+    assert.ok((await page.locator('#gyro-bias-storage').textContent()).includes('已保存在 NVS'));
+    await page.evaluate(() => { __mock.oldGyroCal = true; });
+    await page.click('#gyro-cal');
+    await page.waitForFunction(() => document.querySelector('#gyro-cal-status').textContent.includes('当前固件不支持'));
+    checks.push('静止陀螺校准区分采样、成功、运动取消和旧固件；不改变网页参考或禁用停机');
 
     await page.waitForFunction(() => document.querySelector('#acc-f-0').textContent === '0.1000');
     assert.equal(await page.locator('#imu-filter-enable').isChecked(), true);
@@ -426,6 +461,8 @@ async function injectMock(page) {
 
     await page.click('#connect');
     await page.waitForFunction(() => document.querySelector('#notice').textContent.includes('板端已确认订阅'));
+    assert.ok((await page.locator('#gyro-bias-storage').textContent()).includes('已保存在 NVS'));
+    checks.push('三轴零偏区分未保存、保存拒绝、保存成功，重连读取已存档状态');
     await page.click('#disconnect');
     await page.waitForFunction(() => document.querySelector('#notice').textContent.includes('串口已释放'));
     const tail = await page.evaluate(() => __mock.commands.slice(-3));

@@ -13,6 +13,8 @@
 
 static const char *TAG = "params";
 static const char *NS = "ffh";
+/* Three binary32 values in rad/s, written together as a single NVS blob. */
+static const char *GYRO_BIAS_KEY = "gyro_bias_v1";
 
 #define ENC_CAL_VERSION 3
 #define LEGACY_ENC_CPR 600 /* 3 PPR * 4 * the old 50:1 gearbox default. */
@@ -34,6 +36,7 @@ static void apply_defaults(svc_params_t *p)
     p->telem_hz = 50;
     p->heater_duty = 0.0f;
     p->imu_kf_en = 1;
+    p->imu_gyro_bias = (imu_gyro_bias_t){0};
 
     p->pid_kp = 2.0f;
     p->pid_ki = 0.5f;
@@ -91,6 +94,15 @@ esp_err_t svc_params_init(svc_params_t *out)
     uint32_t u32;
     if (nvs_get_u8(h, "imu_kf_en", &u8) == ESP_OK && u8 <= 1) {
         out->imu_kf_en = u8;
+    }
+    imu_gyro_bias_t bias = {0};
+    size_t bias_size = sizeof(bias.rad_s);
+    esp_err_t bias_err = nvs_get_blob(h, GYRO_BIAS_KEY, bias.rad_s, &bias_size);
+    if (bias_err == ESP_OK && bias_size == sizeof(bias.rad_s) && imu_gyro_bias_in_range(bias.rad_s)) {
+        bias.valid = true;
+        out->imu_gyro_bias = bias;
+    } else if (bias_err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "Ignoring invalid stored gyro calibration");
     }
     uint8_t enc_cal_version = 0;
     bool migrate_enc_cpr = false;
@@ -191,49 +203,57 @@ esp_err_t svc_params_init(svc_params_t *out)
 
 esp_err_t svc_params_save(const svc_params_t *in)
 {
-    if (!in) {
+    if (!in || (in->imu_gyro_bias.valid && !imu_gyro_bias_in_range(in->imu_gyro_bias.rad_s))) {
         return ESP_ERR_INVALID_ARG;
     }
 
     nvs_handle_t h;
-    ESP_ERROR_CHECK(nvs_open(NS, NVS_READWRITE, &h));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "k_x1000", (int32_t)(in->k * 1000.0f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "b_x1000", (int32_t)(in->b * 1000.0f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "td_x1000", (int32_t)(in->theta_des * 1000.0f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "dmax_x1000", (int32_t)(in->duty_max * 1000.0f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "tmin_x1000", (int32_t)(in->theta_min * 1000.0f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "tmax_x1000", (int32_t)(in->theta_max * 1000.0f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "cpr", in->enc_cpr));
-    ESP_ERROR_CHECK(nvs_set_u8(h, "enc_ver", ENC_CAL_VERSION));
-    ESP_ERROR_CHECK(nvs_set_u8(h, "edir", in->enc_dir));
-    ESP_ERROR_CHECK(nvs_set_u8(h, "cmode", in->ctrl_mode));
-    ESP_ERROR_CHECK(nvs_set_u8(h, "ffen", (in->ctrl_mode == CTRL_MODE_IMPEDANCE) ? 1 : 0));
-    ESP_ERROR_CHECK(nvs_set_u32(h, "thz", in->telem_hz));
-    ESP_ERROR_CHECK(nvs_set_u8(h, "imu_kf_en", in->imu_kf_en));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "heat_x1000", (int32_t)(in->heater_duty * 1000.0f)));
+    esp_err_t err = nvs_open(NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) return err;
+#define SAVE_VALUE(call) do { err = (call); if (err != ESP_OK) goto close; } while (0)
+    SAVE_VALUE(nvs_set_i32(h, "k_x1000", (int32_t)(in->k * 1000.0f)));
+    SAVE_VALUE(nvs_set_i32(h, "b_x1000", (int32_t)(in->b * 1000.0f)));
+    SAVE_VALUE(nvs_set_i32(h, "td_x1000", (int32_t)(in->theta_des * 1000.0f)));
+    SAVE_VALUE(nvs_set_i32(h, "dmax_x1000", (int32_t)(in->duty_max * 1000.0f)));
+    SAVE_VALUE(nvs_set_i32(h, "tmin_x1000", (int32_t)(in->theta_min * 1000.0f)));
+    SAVE_VALUE(nvs_set_i32(h, "tmax_x1000", (int32_t)(in->theta_max * 1000.0f)));
+    SAVE_VALUE(nvs_set_i32(h, "cpr", in->enc_cpr));
+    SAVE_VALUE(nvs_set_u8(h, "enc_ver", ENC_CAL_VERSION));
+    SAVE_VALUE(nvs_set_u8(h, "edir", in->enc_dir));
+    SAVE_VALUE(nvs_set_u8(h, "cmode", in->ctrl_mode));
+    SAVE_VALUE(nvs_set_u8(h, "ffen", (in->ctrl_mode == CTRL_MODE_IMPEDANCE) ? 1 : 0));
+    SAVE_VALUE(nvs_set_u32(h, "thz", in->telem_hz));
+    SAVE_VALUE(nvs_set_u8(h, "imu_kf_en", in->imu_kf_en));
+    SAVE_VALUE(nvs_set_i32(h, "heat_x1000", (int32_t)(in->heater_duty * 1000.0f)));
 
-    ESP_ERROR_CHECK(nvs_set_i32(h, "pkp_x1000", (int32_t)(in->pid_kp * 1000.0f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "pki_x1000", (int32_t)(in->pid_ki * 1000.0f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "pkd_x1000", (int32_t)(in->pid_kd * 1000.0f)));
+    SAVE_VALUE(nvs_set_i32(h, "pkp_x1000", (int32_t)(in->pid_kp * 1000.0f)));
+    SAVE_VALUE(nvs_set_i32(h, "pki_x1000", (int32_t)(in->pid_ki * 1000.0f)));
+    SAVE_VALUE(nvs_set_i32(h, "pkd_x1000", (int32_t)(in->pid_kd * 1000.0f)));
 
-    ESP_ERROR_CHECK(nvs_set_i32(h, "tdes_x1e6", (int32_t)(in->tau_des * 1.0e6f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "tkp_x1000", (int32_t)(in->tq_kp * 1000.0f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "tki_x1000", (int32_t)(in->tq_ki * 1000.0f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "imax_x1000", (int32_t)(in->i_max * 1000.0f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "kt_x1e6", (int32_t)(in->kt * 1.0e6f)));
+    SAVE_VALUE(nvs_set_i32(h, "tdes_x1e6", (int32_t)(in->tau_des * 1.0e6f)));
+    SAVE_VALUE(nvs_set_i32(h, "tkp_x1000", (int32_t)(in->tq_kp * 1000.0f)));
+    SAVE_VALUE(nvs_set_i32(h, "tki_x1000", (int32_t)(in->tq_ki * 1000.0f)));
+    SAVE_VALUE(nvs_set_i32(h, "imax_x1000", (int32_t)(in->i_max * 1000.0f)));
+    SAVE_VALUE(nvs_set_i32(h, "kt_x1e6", (int32_t)(in->kt * 1.0e6f)));
 
-    ESP_ERROR_CHECK(nvs_set_i32(h, "dvm_x100", (int32_t)(in->dob_vm * 100.0f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "dr_x100", (int32_t)(in->dob_r * 100.0f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "dke_x1e6", (int32_t)(in->dob_ke * 1.0e6f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "dkt_x1e6", (int32_t)(in->dob_kt * 1.0e6f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "dj_x1e9", (int32_t)(in->dob_j * 1.0e9f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "dbv_x1e9", (int32_t)(in->dob_b_visc * 1.0e9f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "dtc_x1e6", (int32_t)(in->dob_tau_c * 1.0e6f)));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "dfc_x10", (int32_t)(in->dob_fc_hz * 10.0f)));
-    ESP_ERROR_CHECK(nvs_set_u8(h, "doben", in->dob_enable));
+    SAVE_VALUE(nvs_set_i32(h, "dvm_x100", (int32_t)(in->dob_vm * 100.0f)));
+    SAVE_VALUE(nvs_set_i32(h, "dr_x100", (int32_t)(in->dob_r * 100.0f)));
+    SAVE_VALUE(nvs_set_i32(h, "dke_x1e6", (int32_t)(in->dob_ke * 1.0e6f)));
+    SAVE_VALUE(nvs_set_i32(h, "dkt_x1e6", (int32_t)(in->dob_kt * 1.0e6f)));
+    SAVE_VALUE(nvs_set_i32(h, "dj_x1e9", (int32_t)(in->dob_j * 1.0e9f)));
+    SAVE_VALUE(nvs_set_i32(h, "dbv_x1e9", (int32_t)(in->dob_b_visc * 1.0e9f)));
+    SAVE_VALUE(nvs_set_i32(h, "dtc_x1e6", (int32_t)(in->dob_tau_c * 1.0e6f)));
+    SAVE_VALUE(nvs_set_i32(h, "dfc_x10", (int32_t)(in->dob_fc_hz * 10.0f)));
+    SAVE_VALUE(nvs_set_u8(h, "doben", in->dob_enable));
 
-    ESP_ERROR_CHECK(nvs_commit(h));
+    if (in->imu_gyro_bias.valid) {
+        SAVE_VALUE(nvs_set_blob(h, GYRO_BIAS_KEY, in->imu_gyro_bias.rad_s, sizeof(in->imu_gyro_bias.rad_s)));
+    }
+    err = nvs_commit(h);
+close:
+#undef SAVE_VALUE
     nvs_close(h);
-    ESP_LOGI(TAG, "已写入 NVS");
-    return ESP_OK;
+    if (err == ESP_OK) ESP_LOGI(TAG, "已写入 NVS");
+    else ESP_LOGW(TAG, "NVS save failed: %s", esp_err_to_name(err));
+    return err;
 }

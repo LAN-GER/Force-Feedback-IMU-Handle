@@ -8,6 +8,7 @@
 #include "svc/motor_pid.h"
 #include "svc/motor_torque.h"
 #include "svc/torque_dob.h"
+#include "svc/imu_attitude.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -34,13 +35,16 @@ typedef struct {
     bool imu_ok;
 } svc_telemetry_t;
 
-esp_err_t svc_imu_ff_init(void);
+esp_err_t svc_imu_ff_init(const imu_gyro_bias_t *saved_bias);
 void svc_imu_ff_on_sample(void);
 
 /** 开环占空比（ctrl_mode=OFF 时由采样任务施加）。 */
 void svc_imu_ff_set_openloop_duty(float duty);
 
 void svc_imu_ff_get(svc_telemetry_t *out);
+
+void svc_imu_ff_request_gyro_cal(void);
+imu_gyro_cal_status_t svc_imu_ff_get_gyro_calibration(imu_gyro_bias_t *bias);
 
 #ifdef __cplusplus
 }

@@ -18,6 +18,7 @@ const state = { demo: false, demoTimer: null, demoTime: 0, demoSeq: 0, demoDuty:
   recordStart: 0, params: {}, dirty: new Set(), logs: [], selectedMode: 0,
   selectionDirty: false, angleUnit: 'deg', motorPending: false, controlEpoch: 0,
   filterPending: false, filterEpoch: 0, pose: null, poseValid: false, poseSource: '',
+  gyroCalPending: false, gyroCalEpoch: 0,
   wifiTimer: null, wifiEpoch: 0, wifiPending: false, wifi: null, savePending: false, saveEpoch: 0 };
 const paramDefs = [
   ['theta_des', '目标角度 / rad'], ['duty_max', '闭环 PWM 上限', 0.001, 1],
@@ -178,6 +179,9 @@ function setSubscribed(value) {
 }
 function resetData() {
   state.saveEpoch++; state.savePending = false;
+  state.gyroCalEpoch++; state.gyroCalPending = false;
+  $('gyro-cal-status').textContent = '停机并固定手柄，再校准约 5 秒。';
+  $('gyro-bias-storage').textContent = '连接后读取三轴零偏存档状态。';
   nvsStatus('本次连接尚未执行 NVS 保存。');
   attitude.reset(); demoAttitude.reset(); state.pose = null; state.poseValid = false; state.poseSource = '';
   $('imu-cube').style.transform = quaternionCssMatrix([1, 0, 0, 0]);
@@ -255,6 +259,7 @@ function renderAttitude() {
   $('attitude-status').className = `badge ${live ? 'good' : state.pose ? 'warn' : ''}`;
   $('attitude-source').textContent = state.pose ? state.poseSource : '等待板端四元数 [w,x,y,z]';
   $('attitude-zero').disabled = !live;
+  $('gyro-cal').disabled = !live || !session.connected || state.busy || state.gyroCalPending;
   document.querySelector('.cube-scene').classList.toggle('paused', !live);
   for (const key of ['roll', 'pitch', 'yaw']) displayNumber(`attitude-${key}`, state.pose?.[key], 1);
   if (state.pose) document.querySelector('.cube-scene').setAttribute('aria-label',
@@ -281,6 +286,13 @@ function renderDiagnostics(data) {
     }
     if (data.telem_hz > 0 && data.telem_work_us > 1000000 / data.telem_hz) $('diagnostics').textContent += ' 最近一次测量超过配置周期，可能跳帧。';
   }
+}
+
+function renderGyroBiasStorage(value) {
+  const text = value === 'saved' ? '三轴零偏已保存在 NVS，重启后自动恢复。'
+    : value === 'unsaved' ? '当前三轴零偏尚未保存。点击「保存参数至 NVS」后，重启可恢复。'
+    : value === 'none' ? '板端暂无静止校准值。' : '当前固件未报告三轴零偏存档状态。';
+  $('gyro-bias-storage').textContent = text;
 }
 function renderProbe(data) {
   if (!Array.isArray(data.cases)) {
@@ -489,6 +501,9 @@ session.addEventListener('open', event => {
 session.addEventListener('close', event => {
   if (state.savePending || $('nvs-status').dataset.state === 'unknown') nvsStatus('保存结果未确认：连接已断开，无法确认板端是否已写入 NVS。', 'unknown');
   state.saveEpoch++; state.savePending = false;
+  if (state.gyroCalPending) $('gyro-cal-status').textContent = '连接已断开，校准结果未确认。';
+  state.gyroCalEpoch++; state.gyroCalPending = false;
+  $('gyro-bias-storage').textContent = '连接后读取三轴零偏存档状态。';
   clearTimeout(state.wifiTimer); state.wifiEpoch++; state.wifiPending = false;
   state.filterEpoch++; state.filterPending = false;
   state.controlEpoch++; state.motorPending = false;
@@ -508,6 +523,7 @@ session.addEventListener('message', event => {
   const data = event.detail;
   if (data.t === 'telem') acceptTelemetry(data);
   if (data.live) renderParams(data.live);
+  if (data.t === 'ok' && (data.cmd === 'get' || typeof data.gyro_bias === 'string')) renderGyroBiasStorage(data.gyro_bias);
   if (data.diag && typeof data.diag === 'object') renderDiagnostics(data.diag);
   if (data.probe && typeof data.probe === 'object') renderProbe(data.probe);
   if (data.wifi && typeof data.wifi === 'object') renderWifi(data.wifi);
@@ -662,6 +678,34 @@ action('attitude-zero', () => {
   $('attitude-reference').textContent = '已以当前姿态归零；后续角度为相对此姿态的转动。';
   renderAttitude();
 });
+action('gyro-cal', async () => {
+  if (!session.connected || state.gyroCalPending) return;
+  const epoch = ++state.gyroCalEpoch;
+  const status = $('gyro-cal-status');
+  state.gyroCalPending = true; renderAttitude();
+  status.textContent = '等待板端开始校准，请保持手柄静止…';
+  try {
+    let reply = await command({ cmd: 'imu_gyro_cal' });
+    const deadline = performance.now() + 10000;
+    while (reply.gyro_cal === 'running' && performance.now() < deadline) {
+      if (epoch !== state.gyroCalEpoch) return;
+      status.textContent = '正在校准，请保持手柄静止约 5 秒…';
+      await new Promise(resolve => setTimeout(resolve, 700));
+      if (epoch !== state.gyroCalEpoch) return;
+      reply = await command({ cmd: 'imu_gyro_cal_status' });
+    }
+    if (epoch !== state.gyroCalEpoch) return;
+    if (reply.gyro_cal === 'done') status.textContent = '三轴陀螺校准成功。现在可按需重新设定姿态零点。';
+    else if (reply.gyro_cal === 'motion') status.textContent = '检测到运动，校准取消。固定手柄后重试。';
+    else if (reply.gyro_cal === 'no_data') status.textContent = 'IMU 样本不连续，校准未完成。请检查 IMU 后重试。';
+    else status.textContent = '校准结果未确认，可重新校准。';
+  } catch (error) {
+    if (epoch === state.gyroCalEpoch) status.textContent = /unknown/i.test(error.message)
+      ? '当前固件不支持陀螺校准，请更新固件。' : `校准结果未确认：${error.message}`;
+  } finally {
+    if (epoch === state.gyroCalEpoch) { state.gyroCalPending = false; renderAttitude(); }
+  }
+});
 $('imu-filter-enable').addEventListener('change', async () => {
   const requested = $('imu-filter-enable').checked ? 1 : 0, epoch = state.filterEpoch;
   state.filterPending = true; updateConnection();
@@ -687,7 +731,7 @@ function updateImuComparison() {
   const compare = $('imu-filter-compare').checked;
   document.querySelector('.imu-panel').classList.toggle('raw-only', !compare);
   $('imu-filter-legend').textContent = compare
-    ? '同色为同一轴：虚线是原始值，实线是卡尔曼值。滤波在板端运行，姿态预览由网页计算。'
+    ? '同色为同一轴：虚线是原始值，实线是卡尔曼值。姿态四元数由板端计算。'
     : '当前显示原始数据。对比开关只改变显示，板端滤波由上方开关控制。';
   drawCharts();
 }

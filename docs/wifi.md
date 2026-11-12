@@ -57,7 +57,7 @@ Wi-Fi 地址和 32 位接入密钥仅保存在当前网页内存中；刷新后�
 
 每个请求是**一个完整文本帧**，内容是 JSON 对象，无需 `>>` 前缀或 LF；JSON 最多 255 UTF-8 字节。二进制、分片、嵌入 NUL 或超长请求关闭会话。回复和遥测也是单个 JSON 文本帧，无普通 ESP_LOG 日志。Ping/Pong/Close 由 ESP-IDF HTTP Server 处理。
 
-`get`、`set`、`duty`、`heater`、`sub`、`unsub`、`imu_filter`、`diag`、`imu_probe`、`zero`、`save` 与 USB 语义相同。IMU 与电机字段详见 [SDK 说明](interface_sdk.md#3-imu-与电机遥测)，姿态为 `quat=[w,x,y,z]`。
+`get`、`set`、`duty`、`heater`、`sub`、`unsub`、`imu_filter`、`imu_gyro_cal`、`imu_gyro_cal_status`、`diag`、`imu_probe`、`zero`、`save` 与 USB 语义相同。IMU 与电机字段详见 [SDK 说明](interface_sdk.md#3-imu-与电机遥测)，姿态为 `quat=[w,x,y,z]`。
 
 在本项目网页的模块环境中可复用 `WifiConnection`，它处理回复匹配、超时和掉线。以下示例只查询和订阅，结束时明确停机：
 

@@ -77,7 +77,7 @@
         </form>
         <div class="aux-controls"><form id="heater-form"><label for="heater-input">IMU 加热占空比 <span>0 ~ 1</span></label><div class="input-action"><input id="heater-input" type="number" min="0" max="1" step="0.01" value="0" required><button data-device disabled>设置加热</button></div></form></div>
         <div class="toolbar-group"><button id="zero" data-device disabled>编码器清零</button><button id="save" aria-describedby="nvs-help nvs-status" data-device disabled>保存参数至 NVS</button></div>
-        <p id="nvs-help" class="footnote">修改参数和遥测频率只在当前运行生效。点击保存，将板端已应用的参数写入断电存档，重启后恢复；尚未发送的表单修改不会保存。存档包括遥测频率、滤波开关、编码器、控制模式、目标及加热参数；开环 PWM 占空比不存档。</p>
+        <p id="nvs-help" class="footnote">点击保存，将板端当前参数和最近一次成功的静止陀螺校准写入 NVS，重启后恢复。尚未发送的表单修改和开环 PWM 占空比不存档。</p>
         <p id="nvs-status" class="nvs-status" data-state="idle" role="status" aria-live="polite">本次连接尚未执行 NVS 保存。</p>
         <details><summary>编码器、DOB 与其他参数 <span>修改项保持当前控制模式</span></summary><form id="params-form"><div id="param-fields" class="param-fields"></div><h3>DOB 扰动观测器</h3><div id="dob-fields" class="param-fields"></div><button class="primary" data-device disabled>发送修改参数</button><span id="param-state" class="footnote">尚未读取参数</span></form></details>
       </section>
@@ -128,7 +128,12 @@
               <div><span class="y">Y · 俯仰 Pitch</span><strong><b id="attitude-pitch">—</b><small> °</small></strong></div>
               <div><span class="z">Z · 相对航向 Yaw</span><strong><b id="attitude-yaw">—</b><small> °</small></strong></div>
             </div>
-            <button id="attitude-zero" type="button" disabled>以当前姿态归零</button>
+            <div class="toolbar-group">
+              <button id="attitude-zero" type="button" disabled>以当前姿态归零</button>
+              <button id="gyro-cal" type="button" aria-describedby="gyro-cal-status gyro-bias-storage" disabled>静止校准陀螺仪</button>
+            </div>
+            <p id="gyro-cal-status" class="footnote" role="status">停机并固定手柄，再校准约 5 秒。</p>
+            <p id="gyro-bias-storage" class="footnote" role="status">连接后读取三轴零偏存档状态。</p>
             <p id="attitude-reference" class="footnote" role="status">板端四元数：倾斜参考重力，航向从板端姿态初始化起累计。</p>
             <p class="footnote">优先使用板端卡尔曼数据。航向是相对角度，长时间会漂移；姿态归零仅调整预览参考。</p>
           </div>

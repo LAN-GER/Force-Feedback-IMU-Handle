@@ -107,7 +107,7 @@ void app_main(void)
     ESP_ERROR_CHECK(svc_pos_pid_init());
     ESP_ERROR_CHECK(svc_torque_ctrl_init());
     ESP_ERROR_CHECK(svc_dob_init());
-    ESP_ERROR_CHECK(svc_imu_ff_init());
+    ESP_ERROR_CHECK(svc_imu_ff_init(&g_params_nvs.imu_gyro_bias));
 
     app_apply_controllers_from_params();
 

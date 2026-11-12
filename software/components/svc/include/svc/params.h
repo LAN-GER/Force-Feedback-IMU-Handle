@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include "esp_err.h"
+#include "svc/imu_attitude.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,6 +30,7 @@ typedef struct {
     uint32_t telem_hz;
     float heater_duty;
     uint8_t imu_kf_en; /* Six-axis Kalman denoising, independent of motor mode. */
+    imu_gyro_bias_t imu_gyro_bias; /* Last successful explicit calibration. */
 
     /* 位置 PID */
     float pid_kp;

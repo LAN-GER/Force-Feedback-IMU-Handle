@@ -143,13 +143,23 @@ static void reply_ok(const char *cmd)
     send_reply(buf);
 }
 
+static const char *gyro_bias_storage(const imu_gyro_bias_t *bias)
+{
+    if (!bias->valid) return "none";
+    const imu_gyro_bias_t *saved = &g_params_nvs.imu_gyro_bias;
+    if (saved->valid && memcmp(saved->rad_s, bias->rad_s, sizeof(bias->rad_s)) == 0) return "saved";
+    return "unsaved";
+}
+
 static void reply_get(const char *cmd)
 {
     static char buf[BSP_USB_JSON_CAPACITY];
     const svc_params_t *p = &g_params;
+    imu_gyro_bias_t bias;
+    svc_imu_ff_get_gyro_calibration(&bias);
     int n = snprintf(
         buf, sizeof(buf),
-        "{\"t\":\"ok\",\"cmd\":\"%.12s\","
+        "{\"t\":\"ok\",\"cmd\":\"%.12s\",\"gyro_bias\":\"%s\","
         "\"live\":{\"ctrl_mode\":%u,\"ff_enable\":%u,"
         "\"k\":%.4f,\"b\":%.4f,\"theta_des\":%.4f,\"duty_max\":%.3f,"
         "\"theta_min\":%.3f,\"theta_max\":%.3f,\"enc_cpr\":%ld,\"enc_dir\":%u,"
@@ -158,7 +168,7 @@ static void reply_get(const char *cmd)
         "\"tau_des\":%.6f,\"tq_kp\":%.4f,\"tq_ki\":%.4f,\"i_max\":%.3f,\"kt\":%.6f,"
         "\"dob_enable\":%u,\"dob_vm\":%.2f,\"dob_r\":%.3f,\"dob_ke\":%.6f,\"dob_kt\":%.6f,"
         "\"dob_j\":%.9f,\"dob_b_visc\":%.9f,\"dob_tau_c\":%.6f,\"dob_fc_hz\":%.1f}}",
-        cmd ? cmd : "get",
+        cmd ? cmd : "get", gyro_bias_storage(&bias),
         p->ctrl_mode, p->ff_enable,
         p->k, p->b, p->theta_des, p->duty_max,
         p->theta_min, p->theta_max, (long)p->enc_cpr, p->enc_dir,
@@ -309,6 +319,20 @@ static void handle_line(const char *line)
         reply_diag();
         return;
     }
+    if (strcmp(cmd, "imu_gyro_cal") == 0 || strcmp(cmd, "imu_gyro_cal_status") == 0) {
+        if (strcmp(cmd, "imu_gyro_cal") == 0) {
+            if (g_imu_init_err != ESP_OK) { reply_err(cmd, "IMU not initialized"); return; }
+            svc_imu_ff_request_gyro_cal();
+        }
+        static const char *const states[] = {"idle", "running", "done", "motion", "no_data"};
+        imu_gyro_bias_t bias;
+        imu_gyro_cal_status_t status = svc_imu_ff_get_gyro_calibration(&bias);
+        char buf[112];
+        snprintf(buf, sizeof(buf), "{\"t\":\"ok\",\"cmd\":\"%s\",\"gyro_cal\":\"%s\",\"gyro_bias\":\"%s\"}",
+                 cmd, states[status], gyro_bias_storage(&bias));
+        send_reply(buf);
+        return;
+    }
     if (strcmp(cmd, "imu_filter") == 0) {
         float v;
         if (!json_f(line, "v", &v) || (v != 0.0f && v != 1.0f)) {
@@ -345,12 +369,19 @@ static void handle_line(const char *line)
         return;
     }
     if (strcmp(cmd, "save") == 0) {
-        g_params_nvs = g_params;
-        if (svc_params_save(&g_params_nvs) != ESP_OK) {
+        svc_params_t snapshot = g_params;
+        svc_imu_ff_get_gyro_calibration(&snapshot.imu_gyro_bias);
+        if (svc_params_save(&snapshot) != ESP_OK) {
             reply_err("save", "nvs");
             return;
         }
-        reply_ok("save");
+        g_params_nvs = snapshot;
+        imu_gyro_bias_t current;
+        svc_imu_ff_get_gyro_calibration(&current);
+        char buf[96];
+        snprintf(buf, sizeof(buf), "{\"t\":\"ok\",\"cmd\":\"save\",\"gyro_bias\":\"%s\"}",
+                 gyro_bias_storage(&current));
+        send_reply(buf);
         return;
     }
     if (strcmp(cmd, "duty") == 0) {

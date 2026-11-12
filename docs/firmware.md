@@ -73,7 +73,7 @@ USB / Wi-Fi 共用命令处理器，用互斥锁防止回复缓冲和控制命�
 
 预测 `P⁻ = P + Q·dt`，更新 `K = P⁻/(P⁻+R)`、`x = x + K·(z-x)`、`P = R·P⁻/(P⁻+R)`。首个有效样本直接初始化 x，P=R；加速度默认 Q=0.04 g²/s、R=0.0025 g²，角速度 Q=4 (°/s)²/s、R=1 (°/s)²。这是初始降噪配置，可在 `imu_kalman.h` 调整；增加 Q 或减小 R 会加快跟踪，也会保留更多噪声。滤波有响应滞后，需用实板前后对比评估。
 
-采样任务为 1 kHz，加速度 ODR=100 Hz、陀螺 ODR=1 kHz。加速度仅在读取数据前的 ACC_STATUS bit7=1 时更新，重复读取保持估计和协方差；陀螺按采样时间更新，间隔小于 500µs 的重复轮询跳过，Q 使用实际时间间隔。新数据标志定义见 [Bosch BMI088 数据手册 §5.3.3](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmi088-ds001.pdf)。滤波状态由采样任务独占维护。
+采样任务为 1 kHz，加速度 ODR=100 Hz、陀螺 ODR=1 kHz。驱动仅在 ACC_STATUS bit7=1 时读取加速度数据寄存器，其余轮询沿用上一次读数；读取数据寄存器会清除就绪标志，因此在标志为 0 时不读取，避免清掉刚到的新样本。加速度卡尔曼仅用新样本更新；陀螺按采样时间更新，间隔小于 500µs 的重复轮询跳过，Q 使用实际时间间隔。新数据标志见 [Bosch BMI088 数据手册 §5.3.3](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmi088-ds001.pdf)。滤波状态由采样任务独占维护。
 
 默认开启，`imu_filter` 命令只改变滤波使能，不重新配置电机或重置电机积分器。关闭、读取失败或非有限输入清空滤波状态；数据超过 250ms 未更新或时间倒退时重新初始化。`imu_kf=0` 的滤波数组为无效占位值，网页数值和曲线不显示、CSV 留空。使用 `save` 保存开启状态至 NVS。
 
@@ -88,16 +88,37 @@ gcc -std=c11 -Wall -Wextra -Werror -Isoftware/components/svc/include tests/imu_k
 
 `svc/imu_attitude` 在采样任务中使用陀螺四元数积分和比例重力校正，优先输入有效卡尔曼六轴，滤波关闭或尚未就绪时使用原始六轴。它是姿态融合模块，独立于六轴卡尔曼降噪。输出 `quat=[w,x,y,z]`，为右手系、传感器坐标到世界坐标的单位四元数；世界 +Z 对齐重力参考的向上方向，首次有效姿态的航向为 0，无绝对北向参考。
 
-初始横滚／俯仰直接从重力定向，不从零缓慢爬升。加速度模长 0.7～1.3 g 时参与重力校正，增益为 2.5 s⁻¹；陀螺输入从 °/s 转为 rad/s，每个积分子步最多 10 ms，并归一化。少于 500 µs 的重复轮询不重复积分。无效样本暂停；超过 250 ms 间隔或恢复采样时，重新按重力初始化倾斜并保留相对航向，不积分丢失时段。时间倒退则重置姿态。
+初始横滚／俯仰直接从新鲜加速度定向。原始和融合输入的加速度模长均在 0.7～1.3 g 时接受该重力参考，比例增益为 2.5 s⁻¹；超过 50 ms 没有可用的新样本时暂停重力校正，仅用补偿后的陀螺角速度积分。每个积分子步最多 10 ms，并归一化；少于 500 µs 的重复轮询不重复积分。无效样本暂停；超过 250 ms 间隔或恢复采样时，等待新鲜重力重新初始化倾斜并保留相对航向，不积分丢失时段。时间倒退则重置姿态。
 
-遥测 `quat_ok=1` 表示可用，`quat_kf=1` 表示本次融合用了有效滤波输入；无效 `quat` 是 `[1,0,0,0]` 占位，不能视为实测水平姿态。初始重力不可用时等待有效样本。航向仍受陀螺零偏影响，剧烈线性加速度可干扰倾斜，当前不估计陀螺零偏、不存储姿态到 NVS。
+持续至少 0.75 s 满足低运动条件后，姿态模块用重力方向误差的积分估计倾斜可观测的陀螺零偏。门限使用原始六轴：加速度模长 0.9～1.1 g、相对静止窗口起点的向量变化不超过 0.02 g、扣除当前估计的陀螺模长小于 3 °/s。姿态还须先收敛到距重力参考约 1.25° 以内，才开始学习零偏。运动或重力失效时停止更新零偏，姿态仍正常积分；估计每轴限在 ±3 °/s，保存在 RAM。六轴原始和卡尔曼遥测不扣除该零偏，开关卡尔曼也不禁用姿态补偿。
 
-主机测试针对同一 C 模块验证三轴转动、实际时间间隔、归一化、重力收敛、航向保持及异常输入：
+遥测 `quat_ok=1` 表示可用，`quat_kf=1` 表示本次融合用了有效滤波输入；无效 `quat` 是 `[1,0,0,0]` 占位。无磁力计，重力无法观测绕重力轴的旋转，航向仍可能漂移；当手柄接近垂直并在网页归零时，这种漂移也可能显示为相对 Roll。
+
+固定手柄后可发 `imu_gyro_cal`，让采样任务在约 5 秒内按采样间隔累积三轴原始陀螺读数并估计零偏，包括重力不可观测的分量。运动检测使用陀螺模长（3 °/s）、加速度模长（0.9～1.1 g）及与初始向量的差（0.02 g）；缺少新鲜加速度或样本间隔超过 50 ms 时也取消。六轴无法单靠重力区分极慢的绕重力轴转动与零偏，因此校准必须由用户在静止时启动。成功后直接更新姿态积分的零偏，不重置四元数。命令见 [USB 协议](../protocol/usb_protocol.md#静止陀螺仪校准-imu_gyro_cal)。
+
+显式 `save` 取最近一次成功静止校准的三轴快照，将三个 rad/s 浮点值作为一条 `ffh/gyro_bias_v1` 记录写入 NVS；运行中自适应补偿不写入。上电在采样启动前恢复；缺少记录、长度不符、非有限值或任一轴超过 ±3 °/s 时忽略该记录，其他运行参数照常恢复。
+
+主机测试使用同一 C 模块验证三轴转动、静止缓慢变化的零偏（含实际六轴卡尔曼路径）、重力过期、真实慢速旋转以及无效输入：
 
 ```sh
-gcc -std=c11 -Wall -Wextra -Werror -Isoftware/components/svc/include tests/imu_attitude_test.c software/components/svc/src/imu_attitude.c -lm -o build/imu_attitude_test
+gcc -std=c11 -Wall -Wextra -Werror -Isoftware/components/svc/include tests/imu_attitude_test.c software/components/svc/src/imu_attitude.c software/components/svc/src/imu_kalman.c -lm -o build/imu_attitude_test
 ./build/imu_attitude_test
 ```
+
+静止校准的存档读写可用模拟 NVS 测试（包括旧存档、重启读回、启动应用、非法数据和写入错误）：
+
+```sh
+gcc -std=c11 -Wall -Wextra -Werror -Itests/host_stubs -Isoftware/components/bsp/include -Isoftware/components/svc/include tests/gyro_bias_nvs_test.c software/components/svc/src/params.c software/components/svc/src/imu_attitude.c -lm -o build/gyro_bias_nvs_test
+./build/gyro_bias_nvs_test
+```
+
+### 重启后的横滚实测
+
+2026-11-12，本板通过 USB 校准三轴陀螺仪并保存 NVS，随后断电重新上电。诊断的复位原因为「上电」，固件标识为 `dca59d4f34c7fcee`，与烧录的构建一致。重连后网页从板端读到 `gyro_bias=saved`，本次启动未重新校准。
+
+手柄固定，使用网页「以当前姿态归零」后的相对角度，按约 2 秒间隔读数，共 31 次，首末间隔约 60 秒。Roll 显示从 0.2° 到 0.3°，以读数对时间拟合，约为 +0.12°/分钟；Pitch 和 Yaw 在网页 0.1° 的显示精度下均为 0.0°。
+
+同一块板在加入三轴静止校准前，接近竖直时曾测到相对 Roll 约 9.4°/分钟；校准后仍可能有小幅漂移。本次结果是单板、单次静止测量，未验证更长时段、其他温度或其他安装姿态下的漂移上限。
 
 ## 控制模式
 

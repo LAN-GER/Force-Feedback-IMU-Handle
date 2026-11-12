@@ -17,6 +17,8 @@
 
 static const char *TAG = "bmi088";
 static bool s_ready;
+static bool s_acc_cached;
+static float s_acc_g[3];
 static uint8_t s_acc_id;
 static uint8_t s_gyro_id;
 static esp_err_t s_acc_spi_err = ESP_ERR_INVALID_STATE;
@@ -24,6 +26,7 @@ static esp_err_t s_gyro_spi_err = ESP_ERR_INVALID_STATE;
 
 #define ACC_CHIP_ID_REG   0x00
 #define ACC_STATUS_REG    0x03
+#define ACC_DATA_READY    0x80
 #define ACC_DATA_START    0x12
 #define ACC_CONF          0x40
 #define ACC_RANGE         0x41
@@ -134,6 +137,7 @@ uint8_t drv_bmi088_read_gyro_id(void)
 esp_err_t drv_bmi088_init(void)
 {
     s_ready = false;
+    s_acc_cached = false;
     s_acc_id = 0;
     s_gyro_id = 0;
     s_acc_spi_err = ESP_ERR_INVALID_STATE;
@@ -252,24 +256,32 @@ esp_err_t drv_bmi088_read(bmi088_sample_t *out)
         return ESP_ERR_INVALID_STATE;
     }
 
-    uint8_t abuf[6] = {0};
     uint8_t gbuf[6] = {0};
     uint8_t status = 0;
-    esp_err_t es = read_regs_acc(ACC_STATUS_REG, &status, 1);
-    esp_err_t ea = read_regs_acc(ACC_DATA_START, abuf, 6);
-    esp_err_t eg = read_regs_gyro(GYRO_RATE_X_LSB, gbuf, 6);
-    if (es != ESP_OK || ea != ESP_OK || eg != ESP_OK) {
-        out->ok = false;
-        return es != ESP_OK ? es : ((ea != ESP_OK) ? ea : eg);
+    esp_err_t err = read_regs_acc(ACC_STATUS_REG, &status, 1);
+    if (err != ESP_OK) return err;
+    bool acc_new = (status & ACC_DATA_READY) != 0;
+    if (acc_new) {
+        /* Reading an acceleration data register clears DRDY. If status was
+         * clear, leave the data registers alone so a new sample cannot be lost
+         * between the status check and the data read. */
+        uint8_t abuf[6] = {0};
+        err = read_regs_acc(ACC_DATA_START, abuf, sizeof(abuf));
+        if (err != ESP_OK) return err;
+        for (int i = 0; i < 3; ++i) s_acc_g[i] = (float)le16(&abuf[2*i]) / ACC_LSB_PER_G;
+        s_acc_cached = true;
     }
+    if (!s_acc_cached) return ESP_OK; /* First acceleration sample not ready. */
+    err = read_regs_gyro(GYRO_RATE_X_LSB, gbuf, sizeof(gbuf));
+    if (err != ESP_OK) return err;
 
-    out->ax_g = (float)le16(&abuf[0]) / ACC_LSB_PER_G;
-    out->ay_g = (float)le16(&abuf[2]) / ACC_LSB_PER_G;
-    out->az_g = (float)le16(&abuf[4]) / ACC_LSB_PER_G;
+    out->ax_g = s_acc_g[0];
+    out->ay_g = s_acc_g[1];
+    out->az_g = s_acc_g[2];
     out->gx_dps = (float)le16(&gbuf[0]) / GYRO_LSB_PER_DPS;
     out->gy_dps = (float)le16(&gbuf[2]) / GYRO_LSB_PER_DPS;
     out->gz_dps = (float)le16(&gbuf[4]) / GYRO_LSB_PER_DPS;
     out->ok = true;
-    out->acc_new = (status & 0x80) != 0;
+    out->acc_new = acc_new;
     return ESP_OK;
 }
